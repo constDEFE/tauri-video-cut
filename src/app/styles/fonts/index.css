@@ -1,0 +1,11 @@
+@font-face {
+	font-family: "Geist";
+	src: url("./GeistVF.woff2") format("woff2");
+	font-display: swap;
+}
+
+@font-face {
+	font-family: "GeistMono";
+	src: url("./GeistMonoVF.woff2") format("woff2");
+	font-display: swap;
+}
