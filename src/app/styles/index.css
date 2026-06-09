@@ -1,0 +1,175 @@
+@import "tailwindcss";
+@import "./fonts/index";
+
+@custom-variant dark (&:where(.dark, .dark *));
+@custom-variant light (&:where(.light, .light *));
+
+@theme {
+	--color-accent: rgb(var(--theme-accent));
+	--color-accent-inverted: rgb(var(--theme-accent-inverted));
+	--color-accent-hover: rgb(var(--theme-accent-hover));
+	--color-text: rgb(var(--theme-text));
+	--color-secondary: rgb(var(--theme-secondary));
+	--color-secondary-hover: rgb(var(--theme-secondary-hover));
+	--color-surface: rgb(var(--theme-surface));
+	--color-disabled: rgb(var(--theme-disabled));
+	--color-disabled-text: rgb(var(--theme-disabled-text));
+
+	--color-slider-progress: rgb(var(--theme-accent-inverted));
+	--color-slider-track: rgb(var(--theme-surface));
+	--color-slider-thumb: rgb(var(--theme-accent-inverted));
+
+	--font-default: Geist;
+	--font-geist: Geist;
+	--font-mono: GeistMono;
+	--font-geist-mono: GeistMono;
+}
+
+:root,
+:root.light {
+	--theme-accent: 0 0 0;
+	--theme-accent-inverted: 255 255 255;
+	--theme-accent-hover: 70 70 70;
+	--theme-text: 40 40 40;
+	--theme-secondary: 128 128 128;
+	--theme-secondary-hover: 255 255 255;
+	--theme-surface: 232 232 232;
+	--theme-disabled: 128 128 128;
+	--theme-disabled-text: 200 200 200;
+}
+
+:root.dark {
+	--theme-accent: 255 255 255;
+	--theme-accent-inverted: 0 0 0;
+	--theme-accent-hover: 200 200 200;
+	--theme-text: 200 200 200;
+	--theme-secondary-hover: 0 0 0;
+	--theme-surface: 21 21 21;
+	--theme-disabled-text: 0 0 0;
+}
+
+*,
+*::before,
+*::after {
+	scrollbar-width: thin;
+	scrollbar-color: red;
+}
+
+::-webkit-scrollbar-track {
+	background: red;
+	border-radius: 5px;
+}
+
+body {
+	@apply font-geist isolate bg-transparent transition-colors;
+}
+
+#root {
+	@apply contents;
+}
+
+input[type="checkbox"] {
+	@apply accent-accent;
+}
+
+label:has(input[type="checkbox"]:not(:disabled)) {
+	@apply cursor-pointer;
+}
+
+input[type="range"] {
+	-webkit-appearance: none;
+	appearance: none;
+	border-radius: 3px;
+	border: 1px solid var(--color-secondary);
+
+	background: linear-gradient(
+		var(--gradient-direction),
+		var(--color-slider-progress) 0%,
+		var(--color-slider-progress) var(--progress-value),
+		var(--color-slider-track) var(--progress-value),
+		var(--color-slider-track) 100%
+	);
+
+	&:not(.vertical) {
+		--gradient-direction: to right;
+		height: 8px;
+	}
+
+	&.vertical {
+		width: 8px;
+		writing-mode: vertical-lr;
+		direction: rtl;
+		--gradient-direction: to top;
+	}
+
+	&:focus-visible {
+		outline: none;
+	}
+
+	&::-webkit-slider-thumb {
+		@apply bg-slider-thumb border-secondary size-4 rounded-full border duration-100 ease-out;
+		-webkit-appearance: none;
+		appearance: none;
+	}
+
+	&:not(:disabled)::-webkit-slider-thumb {
+		@apply scale-110 cursor-pointer;
+	}
+
+	&:not(:disabled)::-webkit-slider-thumb:hover {
+		@apply scale-125;
+	}
+}
+
+.surface {
+	@apply bg-surface border-secondary light:shadow-xl light:shadow-gray-100 border;
+}
+
+.input {
+	@apply bg-accent-inverted border-secondary text-accent border duration-100 ease-out;
+
+	&:not(:disabled) {
+		@apply focus:border-accent hover:border-accent focus:outline-none;
+	}
+}
+
+input[type="radio"],
+input[type="checkbox"] {
+	@apply bg-accent accent-accent-inverted before:border-accent-inverted before:bg-accent relative size-4 appearance-none rounded-full before:absolute before:top-1/2 before:left-1/2 before:hidden before:size-3 before:-translate-1/2 before:rounded-full before:border-4 before:content-[''] checked:before:inline-block;
+}
+
+.button {
+	@apply border duration-100 ease-out select-none focus-visible:outline-none;
+
+	&:not(:disabled) {
+		@apply cursor-pointer;
+	}
+
+	&:disabled {
+		@apply pointer-events-none cursor-not-allowed;
+	}
+
+	&:not(.secondary) {
+		@apply bg-accent text-accent-inverted;
+
+		&:not(:disabled) {
+			@apply border-accent hover:bg-accent-hover hover:border-accent-hover;
+		}
+
+		&:disabled {
+			@apply bg-disabled border-disabled text-disabled-text;
+		}
+	}
+
+	&.secondary {
+		@apply bg-surface border-secondary text-accent;
+
+		&:not(:disabled) {
+			@apply hover:bg-secondary-hover;
+		}
+	}
+
+	&.icon {
+		@apply grid place-items-center;
+	}
+}

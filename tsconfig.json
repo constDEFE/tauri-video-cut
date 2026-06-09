@@ -1,0 +1,39 @@
+{
+	"compilerOptions": {
+		"target": "ES2024",
+		"useDefineForClassFields": true,
+		"module": "ESNext",
+		"lib": ["ES2020", "DOM", "DOM.Iterable", "ES2023"],
+		"skipLibCheck": true,
+
+		/* Bundler mode */
+		"moduleResolution": "bundler",
+		"allowImportingTsExtensions": true,
+		"resolveJsonModule": true,
+		"isolatedModules": true,
+		"noEmit": true,
+		"jsx": "react-jsx",
+		"jsxImportSource": "preact",
+
+		/* Linting */
+		"strict": true,
+		"noUnusedLocals": true,
+		"noUnusedParameters": true,
+		"allowUnusedLabels": false,
+		"noUncheckedSideEffectImports": false,
+		"noFallthroughCasesInSwitch": true,
+		"allowUnreachableCode": false,
+		"noUncheckedIndexedAccess": true,
+		"noPropertyAccessFromIndexSignature": true,
+		"noImplicitOverride": true,
+		"noErrorTruncation": true,
+		"exactOptionalPropertyTypes": true,
+		"erasableSyntaxOnly": true,
+
+		"paths": {
+			"@/*": ["./src/*"]
+		}
+	},
+	"include": ["src", "video"],
+	"references": [{ "path": "./tsconfig.node.json" }]
+}
