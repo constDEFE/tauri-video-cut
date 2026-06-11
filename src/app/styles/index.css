@@ -48,16 +48,9 @@
 	--theme-disabled-text: 0 0 0;
 }
 
-*,
-*::before,
-*::after {
-	scrollbar-width: thin;
-	scrollbar-color: red;
-}
-
-::-webkit-scrollbar-track {
-	background: red;
-	border-radius: 5px;
+html {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-accent) var(--color-surface);
 }
 
 body {
@@ -117,7 +110,7 @@ input[type="range"] {
 	}
 
 	&:not(:disabled)::-webkit-slider-thumb:hover {
-		@apply scale-125;
+		@apply scale-125 border-accent;
 	}
 }
 

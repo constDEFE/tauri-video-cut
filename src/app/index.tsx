@@ -4,13 +4,7 @@ import { render } from "preact";
 import { App } from "./app";
 
 const initTheme = () => {
-	const config = window.__CONFIG__;
-
-	if (config.theme === "dark") {
-		document.documentElement.classList.add("dark");
-	} else {
-		document.documentElement.classList.add("light");
-	}
+	document.documentElement.classList.add(window.__CONFIG__.theme);
 };
 
 const init = async () => {
