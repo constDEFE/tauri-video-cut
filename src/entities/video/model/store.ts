@@ -117,8 +117,6 @@ export const useVideoStore = create<VideoStore>((set, get) => ({
 				store.private._audioTracksMap.set(t.index, t);
 			});
 
-			console.debug({ metadata })
-
 			set((s) => ({
 				state: {
 					...s.state,
