@@ -22,7 +22,7 @@ export const SegmentCard = ({ metadata, idx, segment }: Props) => {
 			<div class="space-y-2">
 				{metadata.audio_tracks.map((track) => (
 					<Checkbox name={`per-segment-${segment.id}-${track.index}`} defaultChecked key={track.index}>
-						Track {track.index}: {track.codec}
+						{track.name} ({track.codec})
 					</Checkbox>
 				))}
 			</div>

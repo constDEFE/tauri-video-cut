@@ -1,12 +1,11 @@
 import { create } from "zustand";
 
-import type { MpvAudioTrack, VideoMetadata } from "./types";
+import type { AudioTrack, VideoMetadata } from "./types";
 
 type State = {
 	player: {
 		isInitialized: boolean;
 		isFileLoaded: boolean;
-		audioTracks: MpvAudioTrack[];
 		selectedAudio: number;
 		isPlaying: boolean;
 		isMuted: boolean;
@@ -21,16 +20,15 @@ type State = {
 };
 
 type Private = {
-	_audioTracksMap: Map<MpvAudioTrack["id"], MpvAudioTrack>;
+	_audioTracksMap: Map<AudioTrack["index"], AudioTrack>;
 };
 
 type Actions = {
 	player: {
-		setAudioTracks: (tracks: MpvAudioTrack[]) => void;
 		setSelectedAudio: (id: number) => void;
 		setInitialized: (initialized: boolean) => void;
 		setFileLoaded: (loaded: boolean) => void;
-		getAudioById: (id: number) => MpvAudioTrack;
+		getAudioById: (id: number) => AudioTrack;
 		setPlaying: (playing: boolean) => void;
 		setPaused: (paused: boolean) => void;
 		setVolume: (volume: number) => void;
@@ -52,7 +50,6 @@ export type VideoStore = {
 
 const INITIAL_STATE: State = {
 	player: {
-		audioTracks: [],
 		selectedAudio: 1,
 		isPlaying: false,
 		isMuted: false,
@@ -81,17 +78,6 @@ export const useVideoStore = create<VideoStore>((set, get) => ({
 			getAudioById: (id) => {
 				const store = get();
 				return store.private._audioTracksMap.get(id)!;
-			},
-			setAudioTracks: (tracks) => {
-				const store = get();
-
-				store.private._audioTracksMap.clear();
-
-				tracks.forEach((t) => {
-					store.private._audioTracksMap.set(t.id, t);
-				});
-
-				set((s) => ({ state: { ...s.state, player: { ...s.state.player, audioTracks: tracks, selectedAudio: 0 } } }));
 			},
 			setSelectedAudio: (id) => {
 				set((s) => ({ state: { ...s.state, player: { ...s.state.player, selectedAudio: id } } }));
@@ -123,7 +109,25 @@ export const useVideoStore = create<VideoStore>((set, get) => ({
 			}
 		},
 		setVideo: (filePath, metadata) => {
-			set((s) => ({ state: { ...s.state, filePath, metadata, isLoaded: true } }));
+			const store = get();
+
+			store.private._audioTracksMap.clear();
+
+			metadata.audio_tracks.forEach((t) => {
+				store.private._audioTracksMap.set(t.index, t);
+			});
+
+			console.debug({ metadata })
+
+			set((s) => ({
+				state: {
+					...s.state,
+					filePath,
+					metadata,
+					isLoaded: true,
+					player: { ...s.state.player, selectedAudio: metadata.audio_tracks[0]?.index ?? 0 }
+				}
+			}));
 		},
 		reset: () => {
 			set({ state: INITIAL_STATE });

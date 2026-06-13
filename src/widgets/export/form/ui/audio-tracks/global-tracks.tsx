@@ -9,7 +9,7 @@ export const GlobalTracks = () => {
 			<p class="text-accent text-sm font-medium">Select tracks to include:</p>
 			{metadata?.audio_tracks.map((track) => (
 				<Checkbox key={track.index} defaultChecked name={`global-${track.index}`}>
-					Track {track.index}: {track.codec}
+					{track.name} ({track.codec})
 				</Checkbox>
 			))}
 		</div>

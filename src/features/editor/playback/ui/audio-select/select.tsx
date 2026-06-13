@@ -17,19 +17,22 @@ import type { VideoStore } from "@/entities/video";
 const TypedSelect = UiSelect<number>;
 
 const SELECT_VIDEO = (s: VideoStore) => ({
-	tracks: s.state.player.audioTracks,
+	tracks: s.state.metadata?.audio_tracks,
 	selected: s.state.player.selectedAudio,
-	setTracks: s.actions.player.setAudioTracks,
-	select: s.actions.player.setSelectedAudio,
 	getAudioById: s.actions.player.getAudioById
 });
 
-export const Select = () => {
+type Props = {
+	onSelect: () => void;
+};
+
+export const Select = ({ onSelect }: Props) => {
 	const { getAudioById, selected, tracks } = useVideoStore(useShallow(SELECT_VIDEO));
 
 	const handleSelect = (value: number | null) => {
 		if (!value) return;
 		setAudioTrack(value);
+		onSelect();
 	};
 
 	return (
@@ -42,9 +45,9 @@ export const Select = () => {
 			<SelectContent alignItemWithTrigger={false} side="top" align="start">
 				<SelectGroup>
 					<SelectLabel>Audio Tracks</SelectLabel>
-					{tracks.map((t) => (
-						<SelectItem key={t.id} value={t.id}>
-							{t.name}
+					{tracks?.map((t) => (
+						<SelectItem key={t.index} value={t.index}>
+							{t.name ?? `Track #${t.index}`}
 						</SelectItem>
 					))}
 				</SelectGroup>

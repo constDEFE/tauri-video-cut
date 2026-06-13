@@ -3,8 +3,11 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioTrack {
     pub index: usize,
+    pub track_id: Option<u32>,
     pub codec: String,
     pub channels: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

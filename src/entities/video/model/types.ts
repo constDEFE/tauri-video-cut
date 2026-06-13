@@ -1,8 +1,8 @@
 export type AudioTrack = {
-	index: number;
+	track_id: number;
+	index: number,
 	codec: string;
-	language?: string;
-	channels: number;
+	name: string;
 };
 
 export type VideoMetadata = {
@@ -13,9 +13,4 @@ export type VideoMetadata = {
 	bitrate: number;
 	fps: number;
 	audio_tracks: AudioTrack[];
-};
-
-export type MpvAudioTrack = {
-	id: number;
-	name: string;
 };

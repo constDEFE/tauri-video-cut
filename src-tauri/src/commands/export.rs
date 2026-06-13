@@ -64,6 +64,18 @@ pub async fn export_segments(
             })
             .collect();
 
+        let selected_audio_tracks: Vec<&crate::models::AudioTrack> = segment
+            .audio_tracks
+            .iter()
+            .filter_map(|&track_idx| {
+                if track_idx == 0 {
+                    return None;
+                }
+                let array_idx = track_idx - 1;
+                metadata.audio_tracks.get(array_idx)
+            })
+            .collect();
+
         let start_is_keyframe = keyframes::is_keyframe(segment.start, &keyframes);
         let end_is_keyframe = keyframes::is_keyframe(segment.end, &keyframes);
 
@@ -130,6 +142,7 @@ pub async fn export_segments(
                     k1,
                     k4,
                     &audio_stream_indices,
+                    &selected_audio_tracks,
                 );
 
                 executor::execute_ffmpeg_with_progress(
@@ -175,6 +188,7 @@ pub async fn export_segments(
                     start_is_keyframe,
                     end_is_keyframe,
                     &audio_stream_indices,
+                    &selected_audio_tracks,
                     &metadata.video_codec,
                     move |progress| {
                         let avg_time_per_segment = if segment_times_len > 0 {

@@ -1,6 +1,7 @@
 use crate::error::{AppError, Result};
 use crate::ffmpeg::hwaccel;
 use crate::logger::log_error;
+use crate::models::AudioTrack;
 use regex::Regex;
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader};
@@ -25,6 +26,51 @@ fn new_command(program: &Path) -> Command {
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
     cmd
+}
+
+/// Add audio stream mappings and metadata to ffmpeg args
+fn add_audio_mappings_with_metadata(
+    args: &mut Vec<String>,
+    audio_stream_indices: &[usize],
+    audio_tracks: &[&AudioTrack],
+    is_generated_file: bool, // true for "0:a:{}", false for "0:{}"
+) {
+    if audio_stream_indices.is_empty() {
+        args.push("-an".to_string());
+    } else {
+        for (output_idx, &stream_idx) in audio_stream_indices.iter().enumerate() {
+            args.push("-map".to_string());
+
+            let idx_to_use = if is_generated_file {
+                output_idx
+            } else {
+                stream_idx
+            };
+
+            if is_generated_file {
+                args.push(format!("0:a:{}", idx_to_use));
+            } else {
+                args.push(format!("0:{}", idx_to_use));
+            }
+
+            // Add metadata for track name if available
+            if let Some(track) = audio_tracks.get(output_idx) {
+                if let Some(name) = &track.name {
+                    args.extend([
+                        format!("-metadata:s:a:{}", output_idx),
+                        format!("title={}", name),
+                    ])
+                }
+            }
+        }
+
+        args.extend([
+            "-movflags".to_string(),
+            "+use_metadata_tags+faststart".to_string(),
+            "-map_metadata".to_string(),
+            "0".to_string(),
+        ])
+    }
 }
 
 const DEFAULT_X264_PRESET: &str = "medium";
@@ -123,37 +169,31 @@ pub fn build_export_args(
     start: f64,
     end: f64,
     audio_stream_indices: &[usize],
+    audio_tracks: &[&AudioTrack],
 ) -> Vec<String> {
     let mut args = Vec::new();
 
-    args.push("-ss".to_string());
-    args.push(format!("{:.3}", start));
-    args.push("-i".to_string());
-    args.push(input_path.to_string());
-    args.push("-to".to_string());
-    args.push(format!("{:.3}", end - start));
+    args.extend([
+        "-ss".to_string(),
+        format!("{:.3}", start),
+        "-i".to_string(),
+        input_path.to_string(),
+        "-to".to_string(),
+        format!("{:.3}", end - start),
+        "-map".to_string(),
+        "0:v:0".to_string(),
+    ]);
 
-    args.push("-map".to_string());
-    args.push("0:v:0".to_string());
+    add_audio_mappings_with_metadata(&mut args, audio_stream_indices, audio_tracks, false);
 
-    if audio_stream_indices.is_empty() {
-        args.push("-an".to_string());
-    } else {
-        for &idx in audio_stream_indices {
-            args.push("-map".to_string());
-            args.push(format!("0:{}", idx));
-        }
-    }
-
-    args.push("-c".to_string());
-    args.push("copy".to_string());
-
-    args.push("-y".to_string());
-
-    args.push("-progress".to_string());
-    args.push("pipe:2".to_string());
-
-    args.push(output_path.to_string());
+    args.extend([
+        "-c".to_string(),
+        "copy".to_string(),
+        "-y".to_string(),
+        "-progress".to_string(),
+        "pipe:2".to_string(),
+        output_path.to_string(),
+    ]);
 
     args
 }
@@ -172,6 +212,7 @@ pub fn execute_smart_cut<F>(
     start_is_keyframe: bool,
     end_is_keyframe: bool,
     audio_stream_indices: &[usize],
+    audio_tracks: &[&AudioTrack],
     video_codec: &str,
     mut progress_callback: F,
 ) -> Result<()>
@@ -219,6 +260,7 @@ where
             &decoder_chain,
             &hwaccel_type,
             audio_stream_indices,
+            audio_tracks,
             video_codec,
             Some(format!("expr:gte(t,{:.3})", k2 - k1)),
             |prog| progress_callback(current_progress + prog * 0.4),
@@ -234,7 +276,7 @@ where
     let copy_end = if end_is_keyframe { end } else { k3 };
     let copy_duration = copy_end - copy_start;
 
-    let args_copy = vec![
+    let mut args_copy = vec![
         "-ss".to_string(),
         format!("{:.3}", copy_start),
         "-i".to_string(),
@@ -243,25 +285,18 @@ where
         format!("{:.3}", copy_duration),
         "-map".to_string(),
         "0:v:0".to_string(),
-    ]
-    .into_iter()
-    .chain(if audio_stream_indices.is_empty() {
-        vec!["-an".to_string()]
-    } else {
-        audio_stream_indices
-            .iter()
-            .flat_map(|&idx| vec!["-map".to_string(), format!("0:{}", idx)])
-            .collect::<Vec<_>>()
-    })
-    .chain(vec![
+    ];
+
+    add_audio_mappings_with_metadata(&mut args_copy, audio_stream_indices, audio_tracks, false);
+
+    args_copy.extend([
         "-c".to_string(),
         "copy".to_string(),
         "-y".to_string(),
         "-progress".to_string(),
         "pipe:2".to_string(),
         temp_middle_copy.to_str().unwrap().to_string(),
-    ])
-    .collect::<Vec<_>>();
+    ]);
 
     execute_ffmpeg_with_progress(ffmpeg_path, &args_copy, copy_duration, |prog| {
         progress_callback(current_progress + prog * 0.1);
@@ -291,6 +326,7 @@ where
             &decoder_chain,
             &hwaccel_type,
             audio_stream_indices,
+            audio_tracks,
             video_codec,
             Some("expr:eq(n,0)".to_string()),
             |prog| progress_callback(current_progress + prog * 0.4),
@@ -315,7 +351,7 @@ where
     fs::write(&concat_list, &concat_content)
         .map_err(|e| AppError::ExportError(format!("Failed to write concat list: {}", e)))?;
 
-    let args_concat = vec![
+    let mut args_concat = vec![
         "-f".to_string(),
         "concat".to_string(),
         "-safe".to_string(),
@@ -326,13 +362,16 @@ where
         concat_list.to_str().unwrap().to_string(),
         "-map".to_string(),
         "0:v".to_string(),
-        "-map".to_string(),
-        "0:a?".to_string(),
+    ];
+
+    add_audio_mappings_with_metadata(&mut args_concat, audio_stream_indices, audio_tracks, true);
+
+    args_concat.extend([
         "-c".to_string(),
         "copy".to_string(),
         "-y".to_string(),
         temp_concat.to_str().unwrap().to_string(),
-    ];
+    ]);
 
     let mut child = new_command(ffmpeg_path)
         .args(&args_concat)
@@ -378,7 +417,7 @@ where
     let trim_start = if start_is_keyframe { 0.0 } else { start - k1 };
     let trim_duration = end - start;
 
-    let args_trim = vec![
+    let mut args_trim = vec![
         "-ss".to_string(),
         format!("{:.3}", trim_start),
         "-i".to_string(),
@@ -386,12 +425,17 @@ where
         "-t".to_string(),
         format!("{:.3}", trim_duration),
         "-map".to_string(),
-        "0".to_string(),
+        "0:v:0".to_string(),
+    ];
+
+    add_audio_mappings_with_metadata(&mut args_trim, audio_stream_indices, audio_tracks, true);
+
+    args_trim.extend([
         "-c".to_string(),
         "copy".to_string(),
         "-y".to_string(),
         output_path.to_string(),
-    ];
+    ]);
 
     let status = new_command(ffmpeg_path)
         .args(&args_trim)
@@ -429,6 +473,7 @@ fn encode_segment_with_fallback<F>(
     decoder_chain: &[Option<String>],
     hwaccel_type: &hwaccel::HwAccelType,
     audio_stream_indices: &[usize],
+    audio_tracks: &[&AudioTrack],
     video_codec: &str,
     force_keyframes: Option<String>,
     mut progress_callback: F,
@@ -452,49 +497,45 @@ where
 
                 // Add explicit hw decoder
                 if let Some(dec) = decoder {
-                    args.push("-c:v".to_string());
-                    args.push(dec.clone());
+                    args.extend(["-c:v".to_string(), dec.clone()])
                 }
             } else if let Some(dec) = decoder {
                 // Software decoder like libdav1d - no hwaccel needed
-                args.push("-c:v".to_string());
-                args.push(dec.clone());
+                args.extend(["-c:v".to_string(), dec.clone()])
             }
 
-            args.push("-ss".to_string());
-            args.push(format!("{:.3}", start_time));
-            args.push("-i".to_string());
-            args.push(input_path.to_string());
-            args.push("-t".to_string());
-            args.push(format!("{:.3}", duration));
-            args.push("-c:v".to_string());
-            args.push(encoder.clone());
+            args.extend([
+                "-ss".to_string(),
+                format!("{:.3}", start_time),
+                "-i".to_string(),
+                input_path.to_string(),
+                "-t".to_string(),
+                format!("{:.3}", duration),
+                "-c:v".to_string(),
+                encoder.clone(),
+            ]);
 
             add_encoder_params(&mut args, encoder, video_codec);
 
             if let Some(ref keyframes) = force_keyframes {
-                args.push("-force_key_frames".to_string());
-                args.push(keyframes.clone());
+                args.extend(["-force_key_frames".to_string(), keyframes.clone()])
             }
 
-            args.push("-c:a".to_string());
-            args.push("copy".to_string());
-            args.push("-map".to_string());
-            args.push("0:v:0".to_string());
+            args.extend([
+                "-c:a".to_string(),
+                "copy".to_string(),
+                "-map".to_string(),
+                "0:v:0".to_string(),
+            ]);
 
-            if audio_stream_indices.is_empty() {
-                args.push("-an".to_string());
-            } else {
-                for &stream_idx in audio_stream_indices {
-                    args.push("-map".to_string());
-                    args.push(format!("0:{}", stream_idx));
-                }
-            }
+            add_audio_mappings_with_metadata(&mut args, audio_stream_indices, audio_tracks, false);
 
-            args.push("-y".to_string());
-            args.push("-progress".to_string());
-            args.push("pipe:2".to_string());
-            args.push(output_path.to_str().unwrap().to_string());
+            args.extend([
+                "-y".to_string(),
+                "-progress".to_string(),
+                "pipe:2".to_string(),
+                output_path.to_str().unwrap().to_string(),
+            ]);
 
             match execute_ffmpeg_with_progress(ffmpeg_path, &args, duration, &mut progress_callback)
             {
@@ -529,37 +570,36 @@ where
 fn add_encoder_params(args: &mut Vec<String>, encoder: &str, _video_codec: &str) {
     match encoder {
         "h264_nvenc" | "hevc_nvenc" | "av1_nvenc" => {
-            args.push("-preset".to_string());
-            args.push("p4".to_string()); // Medium quality/speed
-            args.push("-cq".to_string());
-            args.push(DEFAULT_X264_QP.to_string());
+            args.extend([
+                "-preset".to_string(),
+                "p4".to_string(), // Medium quality/speed
+                "-cq".to_string(),
+                DEFAULT_X264_QP.to_string(),
+            ])
         }
-        "libx264" | "libx265" => {
-            args.push("-preset".to_string());
-            args.push(DEFAULT_X264_PRESET.to_string());
-            args.push("-qp".to_string());
-            args.push(if encoder == "libx264" {
+        "libx264" | "libx265" => args.extend([
+            "-preset".to_string(),
+            DEFAULT_X264_PRESET.to_string(),
+            "-qp".to_string(),
+            if encoder == "libx264" {
                 DEFAULT_X264_QP.to_string()
             } else {
                 DEFAULT_X265_QP.to_string()
-            });
-        }
-        "libsvtav1" => {
-            args.push("-preset".to_string());
-            args.push(DEFAULT_SVT_AV1_PRESET.to_string());
-            args.push("-qp".to_string());
-            args.push(DEFAULT_SVT_AV1_QP.to_string());
-        }
-        "libvpx-vp9" => {
-            args.push("-crf".to_string());
-            args.push(DEFAULT_VP9_CRF.to_string());
-            args.push("-b:v".to_string());
-            args.push("0".to_string());
-        }
-        _ => {
-            args.push("-qscale:v".to_string());
-            args.push(DEFAULT_QSCALE.to_string());
-        }
+            },
+        ]),
+        "libsvtav1" => args.extend([
+            "-preset".to_string(),
+            DEFAULT_SVT_AV1_PRESET.to_string(),
+            "-qp".to_string(),
+            DEFAULT_SVT_AV1_QP.to_string(),
+        ]),
+        "libvpx-vp9" => args.extend([
+            "-crf".to_string(),
+            DEFAULT_VP9_CRF.to_string(),
+            "-b:v".to_string(),
+            "0".to_string(),
+        ]),
+        _ => args.extend(["-qscale:v".to_string(), DEFAULT_QSCALE.to_string()]),
     }
 }
 
