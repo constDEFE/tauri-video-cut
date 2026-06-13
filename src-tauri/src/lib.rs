@@ -54,6 +54,9 @@ pub fn run() {
                 .initialization_script(&format!("window.__CONFIG__ = {};", config_json))
                 .build();
 
+            #[cfg(debug_assertions)]
+            _window?.open_devtools(); 
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
