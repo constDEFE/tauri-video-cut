@@ -37,10 +37,9 @@ export const ExportProgress = ({ settings }: Props) => {
 					<p class="text-xl font-medium">{formatETA(progress.etaSeconds)}</p>
 				</div>
 			</div>
-			<div class="text-text mt-4 space-y-1 text-center text-sm select-none">
-				<p class="text-text mt-4 text-center text-sm select-none">Please wait while your segments are being exported</p>
-				{isProbing && <p class="text-text mt-4 text-center text-sm select-none">Extracting keyframes...</p>}
-			</div>
+			<p class="text-text mt-4 text-center text-sm select-none">
+				{isProbing ? "Extracting keyframes..." : "Exporting your segments..."}
+			</p>
 		</>
 	);
 };
