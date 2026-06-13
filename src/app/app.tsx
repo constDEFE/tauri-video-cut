@@ -13,14 +13,11 @@ import { router } from "./routes";
 export const App = () => {
 	usePreventContextMenu();
 
-	useHotkeys(
-		[
-			{ hotkey: "F11", callback: toggleFullscreen },
-			{ hotkey: "F", callback: toggleFullscreen },
-			{ hotkey: "Escape", callback: exitFullscreen }
-		],
-		{ ignoreInputs: false }
-	);
+	useHotkeys([
+		{ hotkey: "F11", callback: toggleFullscreen, options: { ignoreInputs: false } },
+		{ hotkey: "F", callback: toggleFullscreen },
+		{ hotkey: "Escape", callback: exitFullscreen, options: { ignoreInputs: false } }
+	]);
 
 	return (
 		<AppErrorBoundary>
