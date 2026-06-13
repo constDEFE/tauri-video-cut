@@ -13,7 +13,10 @@ const WINDOWS_MPV_CONFIG: Record<string, string> = {
 	"force-window": "yes",
 	"input-default-bindings": "no",
 	"input-vo-keyboard": "no",
-	pause: "yes"
+	pause: "yes",
+	autofit: "100%x100%",
+	"autofit-larger": "100%x100%",
+	"video-unscaled": "no",
 };
 
 const OBSERVED_PROPERTIES = [
