@@ -11,6 +11,8 @@ type Props = {
 export const ExportProgress = ({ settings }: Props) => {
 	const progress = useExport(settings);
 
+	const isProbing = progress.currentSegment === 0 && progress.completionPercent === 0;
+
 	return (
 		<>
 			<h1 class="text-accent mb-6 text-center text-4xl font-bold select-none">Export in progress</h1>
@@ -35,7 +37,10 @@ export const ExportProgress = ({ settings }: Props) => {
 					<p class="text-xl font-medium">{formatETA(progress.etaSeconds)}</p>
 				</div>
 			</div>
-			<p class="text-text mt-4 text-center text-sm select-none">Please wait while your segments are being exported</p>
+			<div class="text-text mt-4 space-y-1 text-center text-sm select-none">
+				<p class="text-text mt-4 text-center text-sm select-none">Please wait while your segments are being exported</p>
+				{isProbing && <p class="text-text mt-4 text-center text-sm select-none">Extracting keyframes...</p>}
+			</div>
 		</>
 	);
 };
