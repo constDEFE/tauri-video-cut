@@ -49,8 +49,8 @@
 }
 
 html {
-  scrollbar-width: thin;
-  scrollbar-color: var(--color-accent) var(--color-surface);
+	scrollbar-width: thin;
+	scrollbar-color: var(--color-accent) var(--color-surface);
 }
 
 body {
@@ -110,7 +110,7 @@ input[type="range"] {
 	}
 
 	&:not(:disabled)::-webkit-slider-thumb:hover {
-		@apply scale-125 border-accent;
+		@apply border-accent scale-125;
 	}
 }
 

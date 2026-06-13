@@ -1,6 +1,6 @@
 export type AudioTrack = {
 	track_id: number;
-	index: number,
+	index: number;
 	codec: string;
 	name: string;
 };

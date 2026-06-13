@@ -15,12 +15,12 @@ export const AudioSelector = memo(({ isDisabled }: Props) => {
 	const hasTracks = useVideoStore((s) => !!s.state.metadata?.audio_tracks.length);
 
 	const handleOpenChange = (isOpen: boolean) => {
-		setIsOpen(isOpen)
-	}
+		setIsOpen(isOpen);
+	};
 
 	const handleSelect = () => {
 		setIsOpen(false);
-	}
+	};
 
 	return (
 		<Popover open={isOpen} onOpenChange={handleOpenChange}>

@@ -16,7 +16,7 @@ const WINDOWS_MPV_CONFIG: Record<string, string> = {
 	pause: "yes",
 	autofit: "100%x100%",
 	"autofit-larger": "100%x100%",
-	"video-unscaled": "no",
+	"video-unscaled": "no"
 };
 
 const OBSERVED_PROPERTIES = [
