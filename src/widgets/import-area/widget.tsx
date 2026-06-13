@@ -5,7 +5,7 @@ import { useVideoLoader } from "@/features/import/video-loader";
 import { FileVideoIcon } from "@/shared/ui/icons";
 import { cn } from "@/shared/utils/cn";
 
-const VIDEO_FORMATS = ["mp4", "mkv", "mov", "avi", "webm", "ts"];
+const VIDEO_FORMATS = ["mp4", "mkv", "mov", "avi", "webm"];
 
 const CN = {
 	container:
