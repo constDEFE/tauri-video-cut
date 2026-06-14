@@ -34,6 +34,6 @@
 
 _Initial release._
 
-[1.1.1]: https://github.com/owner/name/releases/tag/v1.1.1
-[1.1.0]: https://github.com/owner/name/releases/tag/v1.1.0
-[1.0.0]: https://github.com/owner/name/releases/tag/v1.0.0
+[1.1.1]: https://github.com/constdefe/tauri-video-cut/releases/tag/1.1.1
+[1.1.0]: https://github.com/constdefe/tauri-video-cut/releases/tag/1.1.0
+[1.0.0]: https://github.com/constdefe/tauri-video-cut/releases/tag/1.0.0
