@@ -1,6 +1,6 @@
 [package]
 name = "tauri-video-cut"
-version = "1.1.0"
+version = "1.1.1"
 description = "Fast, lossless video cutting tool built with Tauri, Rust, and Preact"
 edition = "2024"
 license = "Apache-2.0"

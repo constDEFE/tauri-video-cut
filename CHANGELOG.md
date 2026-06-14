@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.1.1] - 2026-06-15
+
+### Fixed
+
+- Revert extraction of keyframes by packets as frames proved worse performance despite using less RAM ([d015dfb](https://github.com/constDEFE/tauri-video-cut/commit/d015dfbc6e339e953d7c61494fb41543d8602673)) ([@constDEFE](https://github.com/constDEFE))
+
 ## [1.1.0] - 2026-06-14
 
 ### Added
@@ -28,5 +34,6 @@
 
 _Initial release._
 
+[1.1.1]: https://github.com/owner/name/releases/tag/v1.1.1
 [1.1.0]: https://github.com/owner/name/releases/tag/v1.1.0
 [1.0.0]: https://github.com/owner/name/releases/tag/v1.0.0
