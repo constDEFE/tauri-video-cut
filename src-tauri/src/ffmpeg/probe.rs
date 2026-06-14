@@ -57,13 +57,14 @@ struct FFprobeFormat {
 }
 
 #[derive(Debug, Deserialize)]
-struct FFprobeFramesOutput {
-    frames: Vec<FFprobeFrame>,
+struct FFprobePacketsOutput {
+    packets: Vec<FFprobePacket>,
 }
 
 #[derive(Debug, Deserialize)]
-struct FFprobeFrame {
-    best_effort_timestamp_time: Option<String>,
+struct FFprobePacket {
+    pts_time: Option<String>,
+    flags: Option<String>,
 }
 
 pub fn probe_video(ffprobe_path: &std::path::Path, video_path: &str) -> Result<VideoMetadata> {
@@ -197,11 +198,8 @@ pub fn get_keyframes(ffprobe_path: &std::path::Path, video_path: &str) -> Result
             "quiet",
             "-select_streams",
             "v:0",
-            "-skip_frame",
-            "nokey",
-            "-show_frames",
             "-show_entries",
-            "frame=best_effort_timestamp_time",
+            "packet=pts_time,flags",
             "-of",
             "json",
             video_path,
@@ -229,16 +227,21 @@ pub fn get_keyframes(ffprobe_path: &std::path::Path, video_path: &str) -> Result
         )));
     }
 
-    let frames_data: FFprobeFramesOutput = serde_json::from_slice(&output.stdout).map_err(|e| {
-        log_error(&format!("Failed to parse keyframe data: {}", e));
-        AppError::FFprobeError(format!("Failed to parse keyframe data: {}", e))
-    })?;
+    let packets_data: FFprobePacketsOutput =
+        serde_json::from_slice(&output.stdout).map_err(|e| {
+            log_error(&format!("Failed to parse keyframe data: {}", e));
+            AppError::FFprobeError(format!("Failed to parse keyframe data: {}", e))
+        })?;
 
     let mut keyframes = Vec::new();
-    for frame in frames_data.frames {
-        if let Some(time_str) = frame.best_effort_timestamp_time {
-            if let Ok(time) = time_str.parse::<f64>() {
-                keyframes.push(time);
+    for packet in packets_data.packets {
+        if let Some(flags) = packet.flags {
+            if flags.contains('K') {
+                if let Some(time_str) = packet.pts_time {
+                    if let Ok(time) = time_str.parse::<f64>() {
+                        keyframes.push(time);
+                    }
+                }
             }
         }
     }
