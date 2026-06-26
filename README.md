@@ -27,7 +27,7 @@ Not quite convenient for me and so I stuck with plain recordings
 By the time I had around 30Gb of total free space on my machine, I discovered [LosslessCut](https://github.com/mifi/lossless-cut) tool.
 I saw its huge size (~600Mb) and decided to build my own. It may not be perfect: may not support other system than windows, many video
 formats/codecs, may not work perfectly on specific hardware - but it does solve my specific use-case, does it relatively fast, and has
-small fingerprint on a system
+small footprint on a system
 
 ## Regarding AI
 
