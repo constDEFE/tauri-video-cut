@@ -94,7 +94,7 @@ export const useSegmentsStore = create<SegmentsStore>((set, get) => ({
 
 					return acc;
 				},
-				new Array(store.state.segments.length - 1)
+				Array.from({ length: store.state.segments.length - 1 })
 			);
 
 			const selectedId = store.state.selectedId === id ? (segments.at(-1)?.id ?? "") : store.state.selectedId;
@@ -164,7 +164,7 @@ export const useSegmentsStore = create<SegmentsStore>((set, get) => ({
 
 					return acc;
 				},
-				new Array(store.state.segments.length + 1)
+				Array.from({ length: store.state.segments.length + 1 })
 			);
 
 			set({ state: { ...store.state, segments, selectedId: segment1.id } });

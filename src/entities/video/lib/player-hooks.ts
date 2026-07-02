@@ -1,8 +1,9 @@
 import { useEffect } from "preact/hooks";
 import { listenEvents } from "tauri-plugin-libmpv-api";
 
-import { useVideoStore } from "@/entities/video";
 import { observeMpvProperties } from "@/shared/lib/mpv";
+
+import { useVideoStore } from "../model";
 
 import type { MpvPropertyEvent } from "@/shared/lib/mpv";
 import type { MpvEvent } from "tauri-plugin-libmpv-api";
