@@ -31,9 +31,28 @@ small footprint on a system
 
 ## Regarding AI
 
-95% of Rust code is written with AI, as I'm a Frontend Engineer, not a Native Apps Developer. Despite that, the entire process was 
-end-to-end orchestrated by me: diving into all these ffmpeg and mpv custom configurations; all these codecs, encoders, hardware 
+95% of Rust code is written with AI, as I'm a Frontend Engineer, not a Native Apps Developer. Despite that, the entire process was
+end-to-end orchestrated by me: diving into all these ffmpeg and mpv custom configurations; all these codecs, encoders, hardware
 acceleration methods; stripping binaries to a bare minimum; weighing each trade-off - all of this was done to achieve the end result I wanted
+
+## License
+
+This project's original source code is licensed under the [**Apache License 2.0**](./LICENSE)
+
+However, please note that when building or distributing compiled binaries of this application, the resulting software is governed by the
+[**GNU General Public License v3.0 (GPLv3)**](https://opensource.org/license/gpl-3.0). This is because the application dynamically/statically links to custom-built
+configurations of `FFmpeg` and `mpv` compiled with their GPL flags enabled, alongside various native system runtime libraries
+
+Complete legal compliance details and the full license texts for all compiled Rust dependencies, Node frontend packages, and bundled
+third-party binaries can be found organized within the [`THIRDPARTY_RUST.txt`](./THIRDPARTY_RUST.txt), [`THIRDPARTY_NODE.txt`](./THIRDPARTY_NODE.txt), and
+[`THIRDPARTY_BINARIES.txt`](./THIRDPARTY_BINARIES.txt) files included in both this repository and the release artifacts. In accordance with the GPLv3,
+the complete build configuration and full source code for this application remain openly available in this GitHub repository
+
+### Notice & Contact
+
+All third-party attribution blocks and legal texts are compiled automatically via automated build scripts using dependency manifests and system package
+databases. While every effort has been made to ensure perfect accuracy, if you identify any discrepancies, missing notices, or have any other legal
+or licensing concerns, please reach out directly by opening a GitHub Issue or contacting me at [constant_defe@pm.me](mailto:constant_defe@pm.me)
 
 ## Features
 
