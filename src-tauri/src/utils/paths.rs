@@ -1,14 +1,7 @@
-use crate::{
-    error::{AppError, Result},
-    logger::log_error,
-};
+use crate::error::{AppError, Result};
+use crate::logger::log_error;
 use std::path::PathBuf;
 use tauri::Manager;
-
-pub mod executor;
-pub mod hwaccel;
-pub mod keyframes;
-pub mod probe;
 
 pub fn get_ffmpeg_path(app_handle: &tauri::AppHandle) -> Result<PathBuf> {
     if let Ok(resource_path) = app_handle

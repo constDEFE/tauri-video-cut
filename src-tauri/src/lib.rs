@@ -1,13 +1,16 @@
 mod commands;
 mod config;
+mod core;
 mod error;
-mod ffmpeg;
 mod logger;
 mod models;
+mod types;
+mod utils;
 
 use commands::{export, metadata};
+use core::process::ProcessManager;
 use models::AppConfig;
-use tauri::{WebviewUrl, WebviewWindowBuilder};
+use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
 fn add_lib_to_dll_search_path() {
     use std::iter::once;
@@ -40,8 +43,18 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .manage(
+            ProcessManager::new().expect("Failed to create Windows Job Object. This application requires Windows Vista or later.")
+        )
+        .invoke_handler(tauri::generate_handler![
+            metadata::get_video_metadata,
+            export::export_segments,
+            set_app_config,
+            set_app_config_var,
+            cancel_all_tasks
+        ])
         .setup(|app| {
-            let config = config::load_config().unwrap_or_default();
+            let config = config::load_config(app.app_handle()).unwrap_or_default();
             let config_json = serde_json::to_string(&config).unwrap_or_default();
 
             let _window = WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
@@ -55,26 +68,34 @@ pub fn run() {
                 .build();
 
             #[cfg(debug_assertions)]
-            _window?.open_devtools(); 
+            _window?.open_devtools();
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
-            metadata::get_video_metadata,
-            export::export_segments,
-            set_app_config,
-            set_app_config_var,
-        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
 
 #[tauri::command]
-async fn set_app_config(config: AppConfig) -> Result<(), String> {
-    config::set_app_config(&config).map_err(|e| e.to_string())
+async fn cancel_all_tasks(manager: tauri::State<'_, ProcessManager>) -> Result<(), String> {
+    manager.kill_all();
+    Ok(())
 }
 
 #[tauri::command]
-async fn set_app_config_var(key: String, value: serde_json::Value) -> Result<(), String> {
-    config::set_app_config_var(&key, value).map_err(|e| e.to_string())
+async fn set_app_config(app: tauri::AppHandle, config: AppConfig) -> Result<(), String> {
+    config::set_app_config(&app, &config)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn set_app_config_var(
+    app: tauri::AppHandle,
+    key: String,
+    value: serde_json::Value,
+) -> Result<(), String> {
+    config::set_app_config_var(&app, &key, value)
+        .await
+        .map_err(|e| e.to_string())
 }

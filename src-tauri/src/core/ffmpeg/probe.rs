@@ -1,16 +1,14 @@
+use crate::core::process::ProcessManager;
 use crate::error::{AppError, Result};
-use crate::logger::{log_error, log_info, log_warn};
-use crate::models::{AudioTrack, VideoMetadata};
+use crate::logger::{log_error, log_warn};
+use crate::types::metadata::{AudioTrack, VideoMetadata};
 use serde::Deserialize;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
-use std::process::Command;
+use std::process::Stdio;
+use tokio::process::Command;
 
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
-
-#[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 fn new_command(program: &Path) -> Command {
@@ -67,24 +65,31 @@ struct FFprobePacket {
     flags: Option<String>,
 }
 
-pub fn probe_video(ffprobe_path: &std::path::Path, video_path: &str) -> Result<VideoMetadata> {
-    let output = new_command(ffprobe_path)
+pub async fn probe_video(
+    ffprobe_path: &Path,
+    video_path: &str,
+    process_manager: &ProcessManager,
+) -> Result<VideoMetadata> {
+    let child = new_command(ffprobe_path)
         .args(&[
-            "-v",
-            "quiet",
-            "-print_format",
-            "json",
-            "-show_entries",
-            "format=duration,bit_rate:stream=id,index,codec_type,codec_name,r_frame_rate,width,height,channels:stream_tags=title",
+            "-v", "quiet", "-print_format", "json",
+            "-show_entries", "format=duration,bit_rate:stream=id,index,codec_type,codec_name,r_frame_rate,width,height,channels:stream_tags=title",
             video_path,
         ])
-        .output()
-        .map_err(|e| {
-            AppError::FFprobeError(format!(
-                "Failed to run ffprobe at {:?}: {}",
-                ffprobe_path, e
-            ))
-        })?;
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| AppError::FFprobeError(format!("Failed to spawn ffprobe at {:?}: {}", ffprobe_path, e)))?;
+
+    // Attach ffprobe to ProcessManager for clean shutdown
+    process_manager.attach(&child)?;
+
+    let output = child.wait_with_output().await.map_err(|e| {
+        AppError::FFprobeError(format!(
+            "Failed to run ffprobe at {:?}: {}",
+            ffprobe_path, e
+        ))
+    })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -101,7 +106,11 @@ pub fn probe_video(ffprobe_path: &std::path::Path, video_path: &str) -> Result<V
         )));
     }
 
-    let probe_data: FFprobeOutput = serde_json::from_slice(&output.stdout).map_err(|e| {
+    parse_probe_output(&output.stdout, video_path)
+}
+
+fn parse_probe_output(stdout: &[u8], video_path: &str) -> Result<VideoMetadata> {
+    let probe_data: FFprobeOutput = serde_json::from_slice(stdout).map_err(|e| {
         log_error(&format!("Failed to parse ffprobe output: {}", e));
         AppError::FFprobeError(format!("Failed to parse ffprobe output: {}", e))
     })?;
@@ -160,7 +169,7 @@ pub fn probe_video(ffprobe_path: &std::path::Path, video_path: &str) -> Result<V
         .and_then(|ext| ext.to_str())
         .map(|ext| {
             let e = ext.to_lowercase();
-            e == "mp4" || e == "m4a" || e == "mov" // Apple devices often hide this metadata in .mov too!
+            e == "mp4" || e == "m4a" || e == "mov"
         })
         .unwrap_or(false);
 
@@ -191,8 +200,12 @@ pub fn probe_video(ffprobe_path: &std::path::Path, video_path: &str) -> Result<V
     })
 }
 
-pub fn get_keyframes(ffprobe_path: &std::path::Path, video_path: &str) -> Result<Vec<f64>> {
-    let output = new_command(ffprobe_path)
+pub async fn get_keyframes(
+    ffprobe_path: &Path,
+    video_path: &str,
+    process_manager: &ProcessManager,
+) -> Result<Vec<f64>> {
+    let child = new_command(ffprobe_path)
         .args(&[
             "-v",
             "quiet",
@@ -204,13 +217,25 @@ pub fn get_keyframes(ffprobe_path: &std::path::Path, video_path: &str) -> Result
             "json",
             video_path,
         ])
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|e| {
             AppError::FFprobeError(format!(
-                "Failed to run ffprobe at {:?}: {}",
+                "Failed to spawn ffprobe at {:?}: {}",
                 ffprobe_path, e
             ))
         })?;
+
+    // Attach ffprobe to ProcessManager for clean shutdown
+    process_manager.attach(&child)?;
+
+    let output = child.wait_with_output().await.map_err(|e| {
+        AppError::FFprobeError(format!(
+            "Failed to run ffprobe at {:?}: {}",
+            ffprobe_path, e
+        ))
+    })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -267,17 +292,13 @@ fn parse_fps(fps_str: Option<&str>) -> Option<f64> {
     if den > 0.0 { Some(num / den) } else { None }
 }
 
-/// Parse MP4 track names from moov->trak->udta->name atoms \
-/// See https://trac.ffmpeg.org/ticket/9438 \
-/// Skips heavy mdat (media data) to avoid loading into memory \
-/// Returns Vec of (track_id, name) pairs
+/// Parse MP4 track names from moov->trak->udta->name atoms
 fn extract_mp4_track_names(video_path: &str) -> Result<Vec<(Option<u32>, Option<String>)>> {
     let mut file = File::open(video_path)
         .map_err(|e| AppError::FFprobeError(format!("Failed to open mp4 file: {}", e)))?;
 
     let mut track_data = Vec::new();
 
-    // Read file in chunks, looking for atoms
     let file_size = file
         .metadata()
         .map_err(|e| AppError::FFprobeError(format!("Failed to get file metadata: {}", e)))?
@@ -297,7 +318,6 @@ fn extract_mp4_track_names(video_path: &str) -> Result<Vec<(Option<u32>, Option<
             ));
         }
 
-        // Found moov atom - parse it for trak atoms
         if &header.atom_type == b"moov" {
             let moov_end = pos + header.size;
             let mut moov_pos = pos + header.header_size;
@@ -315,7 +335,6 @@ fn extract_mp4_track_names(video_path: &str) -> Result<Vec<(Option<u32>, Option<
                     ));
                 }
 
-                // Found trak atom - extract track_id and name
                 if &trak_header.atom_type == b"trak" {
                     let track_id = extract_track_id(&mut file, moov_pos, &trak_header)?;
                     let track_name = parse_trak_name(&mut file, moov_pos, &trak_header)?;
@@ -326,25 +345,24 @@ fn extract_mp4_track_names(video_path: &str) -> Result<Vec<(Option<u32>, Option<
                 moov_pos += trak_header.size;
             }
 
-            break; // Done after processing moov
+            break;
         }
 
-        // Skip mdat and other large atoms without reading into memory
         pos += header.size;
     }
 
     for (idx, (track_id, name)) in track_data.iter().enumerate() {
         match (track_id, name) {
             (Some(id), Some(n)) => {
-                log_info(&format!("[MP4 Parser] Track {} ID={}: '{}'", idx, id, n))
+                log_error(&format!("[MP4 Parser] Track {} ID={}: '{}'", idx, id, n))
             }
             (Some(id), None) => {
-                log_info(&format!("[MP4 Parser] Track {} ID={}: <no name>", idx, id))
+                log_error(&format!("[MP4 Parser] Track {} ID={}: <no name>", idx, id))
             }
             (None, Some(n)) => {
-                log_info(&format!("[MP4 Parser] Track {} ID=<unknown>: '{}'", idx, n))
+                log_error(&format!("[MP4 Parser] Track {} ID=<unknown>: '{}'", idx, n))
             }
-            (None, None) => log_info(&format!(
+            (None, None) => log_error(&format!(
                 "[MP4 Parser] Track {} ID=<unknown>: <no name>",
                 idx
             )),
@@ -354,7 +372,64 @@ fn extract_mp4_track_names(video_path: &str) -> Result<Vec<(Option<u32>, Option<
     Ok(track_data)
 }
 
-/// Extract track ID from tkhd atom in trak
+struct AtomHeader {
+    size: u64,
+    atom_type: [u8; 4],
+    header_size: u64,
+}
+
+fn read_atom_header(file: &mut File, pos: u64, container_end: u64) -> Result<AtomHeader> {
+    let mut size_buf = [0u8; 4];
+    file.read_exact(&mut size_buf)
+        .map_err(|e| AppError::FFprobeError(format!("Failed to read atom size: {}", e)))?;
+
+    let size32 = u32::from_be_bytes(size_buf) as u64;
+
+    let mut atom_type = [0u8; 4];
+    file.read_exact(&mut atom_type)
+        .map_err(|e| AppError::FFprobeError(format!("Failed to read atom type: {}", e)))?;
+
+    let (size, header_size) = if size32 == 1 {
+        let mut size64_buf = [0u8; 8];
+        file.read_exact(&mut size64_buf).map_err(|e| {
+            AppError::FFprobeError(format!("Failed to read 64-bit atom size: {}", e))
+        })?;
+        let size64 = u64::from_be_bytes(size64_buf);
+
+        if size64 == 0 {
+            return Err(AppError::FFprobeError(
+                "64-bit atom size cannot be 0".to_string(),
+            ));
+        }
+
+        (size64, 16u64)
+    } else if size32 == 0 {
+        let size = container_end - pos;
+
+        if size < 8 {
+            return Err(AppError::FFprobeError(format!(
+                "Invalid zero-size atom: {}",
+                size
+            )));
+        }
+
+        (size, 8u64)
+    } else if size32 < 8 {
+        return Err(AppError::FFprobeError(format!(
+            "Invalid atom size: {}",
+            size32
+        )));
+    } else {
+        (size32, 8u64)
+    };
+
+    Ok(AtomHeader {
+        size,
+        atom_type,
+        header_size,
+    })
+}
+
 fn extract_track_id(
     file: &mut File,
     trak_start: u64,
@@ -378,19 +453,16 @@ fn extract_track_id(
         }
 
         if &header.atom_type == b"tkhd" {
-            // tkhd layout: version(1) + flags(3) + created(4/8) + modified(4/8) + track_id(4)
             let mut version_flags = [0u8; 4];
             if file.read_exact(&mut version_flags).is_ok() {
                 let version = version_flags[0];
                 let time_size = if version == 1 { 8u64 } else { 4u64 };
 
-                // Skip creation_time and modification_time
                 file.seek(SeekFrom::Current((time_size * 2) as i64))
                     .map_err(|e| {
                         AppError::FFprobeError(format!("Failed to skip tkhd timestamps: {}", e))
                     })?;
 
-                // Read track_id (4 bytes)
                 let mut track_id_buf = [0u8; 4];
                 if file.read_exact(&mut track_id_buf).is_ok() {
                     let track_id = u32::from_be_bytes(track_id_buf);
@@ -404,69 +476,6 @@ fn extract_track_id(
     }
 
     Ok(None)
-}
-
-/// Atom header info with size and whether it's 64-bit
-struct AtomHeader {
-    size: u64,
-    atom_type: [u8; 4],
-    header_size: u64,
-}
-
-/// Read atom header (size + type), handling 64-bit large size
-fn read_atom_header(file: &mut File, pos: u64, container_end: u64) -> Result<AtomHeader> {
-    let mut size_buf = [0u8; 4];
-    file.read_exact(&mut size_buf)
-        .map_err(|e| AppError::FFprobeError(format!("Failed to read atom size: {}", e)))?;
-
-    let size32 = u32::from_be_bytes(size_buf) as u64;
-
-    // Read type (always at bytes 4-7)
-    let mut atom_type = [0u8; 4];
-    file.read_exact(&mut atom_type)
-        .map_err(|e| AppError::FFprobeError(format!("Failed to read atom type: {}", e)))?;
-
-    let (size, header_size) = if size32 == 1 {
-        // 64-bit large size follows type
-        let mut size64_buf = [0u8; 8];
-        file.read_exact(&mut size64_buf).map_err(|e| {
-            AppError::FFprobeError(format!("Failed to read 64-bit atom size: {}", e))
-        })?;
-        let size64 = u64::from_be_bytes(size64_buf);
-
-        if size64 == 0 {
-            return Err(AppError::FFprobeError(
-                "64-bit atom size cannot be 0".to_string(),
-            ));
-        }
-
-        (size64, 16u64) // 4 (size32=1) + 4 (type) + 8 (size64)
-    } else if size32 == 0 {
-        // Extends to end of container/file
-        let size = container_end - pos;
-
-        if size < 8 {
-            return Err(AppError::FFprobeError(format!(
-                "Invalid zero-size atom: {}",
-                size
-            )));
-        }
-
-        (size, 8u64)
-    } else if size32 < 8 {
-        return Err(AppError::FFprobeError(format!(
-            "Invalid atom size: {}",
-            size32
-        )));
-    } else {
-        (size32, 8u64) // 4 (size) + 4 (type)
-    };
-
-    Ok(AtomHeader {
-        size,
-        atom_type,
-        header_size,
-    })
 }
 
 fn parse_trak_name(
@@ -488,25 +497,20 @@ fn parse_trak_name(
             break;
         }
 
-        // Found udta atom - try multiple paths
         if &header.atom_type == b"udta" {
-            // Try path 1: udta -> name (plain text)
             if let Some(name) = try_udta_name(file, pos, &header)? {
                 return Ok(Some(name));
             }
 
-            // Try path 2: udta -> meta -> ilst -> ©nam -> data
             if let Some(name) = try_udta_meta_ilst_nam(file, pos, &header)? {
                 return Ok(Some(name));
             }
 
-            // Try path 3: udta -> title
             if let Some(name) = try_udta_title(file, pos, &header)? {
                 return Ok(Some(name));
             }
         }
 
-        // Found mdia atom - check for nested udta
         if &header.atom_type == b"mdia" {
             if let Some(name) = parse_mdia_udta(file, pos, &header)? {
                 return Ok(Some(name));
@@ -519,7 +523,6 @@ fn parse_trak_name(
     Ok(None)
 }
 
-/// Parse trak -> mdia -> udta path (professional editing suites)
 fn parse_mdia_udta(
     file: &mut File,
     mdia_start: u64,
@@ -540,7 +543,6 @@ fn parse_mdia_udta(
         }
 
         if &header.atom_type == b"udta" {
-            // Try all udta paths
             if let Some(name) = try_udta_name(file, pos, &header)? {
                 return Ok(Some(name));
             }
@@ -560,7 +562,6 @@ fn parse_mdia_udta(
     Ok(None)
 }
 
-/// Path 1: trak -> udta -> name (plain text after 8 byte header)
 fn try_udta_name(
     file: &mut File,
     udta_start: u64,
@@ -584,7 +585,6 @@ fn try_udta_name(
         }
 
         if &header.atom_type == b"name" {
-            // Calculate data size with underflow check
             if header.size < header.header_size {
                 break;
             }
@@ -597,7 +597,7 @@ fn try_udta_name(
                         .trim_end_matches('\0')
                         .trim()
                         .to_string();
-                    log_info(&format!(
+                    log_error(&format!(
                         "[MP4 Parser] Extracted (udta->name): '{}'",
                         name_str
                     ));
@@ -614,7 +614,6 @@ fn try_udta_name(
     Ok(None)
 }
 
-/// Path 2: trak -> udta -> meta -> ilst -> ©nam -> data
 fn try_udta_meta_ilst_nam(
     file: &mut File,
     udta_start: u64,
@@ -638,9 +637,8 @@ fn try_udta_meta_ilst_nam(
         }
 
         if &meta_header.atom_type == b"meta" {
-            // meta has version/flags (4 bytes) after header
             let meta_end = udta_pos + meta_header.size;
-            let mut meta_pos = udta_pos + meta_header.header_size + 4; // Skip header + version/flags
+            let mut meta_pos = udta_pos + meta_header.header_size + 4;
 
             while meta_pos < meta_end {
                 file.seek(SeekFrom::Start(meta_pos)).map_err(|e| {
@@ -690,7 +688,6 @@ fn try_udta_meta_ilst_nam(
                                 }
 
                                 if &data_header.atom_type == b"data" {
-                                    // data has type flags (4 bytes) after header - check underflow
                                     let header_and_flags = data_header.header_size + 4;
                                     if data_header.size < header_and_flags {
                                         break;
@@ -706,7 +703,7 @@ fn try_udta_meta_ilst_nam(
                                                     .trim_end_matches('\0')
                                                     .trim()
                                                     .to_string();
-                                                log_info(&format!(
+                                                log_error(&format!(
                                                     "[MP4 Parser] Extracted (udta->meta->ilst->©nam->data): '{}'",
                                                     name_str
                                                 ));
@@ -736,7 +733,6 @@ fn try_udta_meta_ilst_nam(
     Ok(None)
 }
 
-/// Path 3: trak -> udta -> title (version/flags + language pad + text)
 fn try_udta_title(
     file: &mut File,
     udta_start: u64,
@@ -760,7 +756,6 @@ fn try_udta_title(
         }
 
         if &header.atom_type == b"titl" {
-            // title has version/flags (4 bytes) + language pad (2 bytes) - check underflow
             let skip_size = header.header_size + 4 + 2;
             if header.size < skip_size {
                 break;
@@ -768,7 +763,7 @@ fn try_udta_title(
 
             let text_size = (header.size - skip_size) as usize;
             if text_size > 0 && text_size < 1024 {
-                let mut skip_bytes = [0u8; 6]; // version/flags + lang pad
+                let mut skip_bytes = [0u8; 6];
                 if file.read_exact(&mut skip_bytes).is_ok() {
                     let mut name_data = vec![0u8; text_size];
                     if file.read_exact(&mut name_data).is_ok() {
@@ -777,7 +772,7 @@ fn try_udta_title(
                             .trim()
                             .to_string();
 
-                        log_info(&format!(
+                        log_error(&format!(
                             "[MP4 Parser] Extracted (udta->title): '{}'",
                             name_str
                         ));

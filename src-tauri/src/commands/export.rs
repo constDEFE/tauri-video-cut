@@ -1,8 +1,11 @@
+use crate::core::ffmpeg::{executor, keyframes, probe};
+use crate::utils::paths::{get_ffmpeg_path, get_ffprobe_path};
+use crate::core::process::ProcessManager;
 use crate::error::{AppError, Result};
-use crate::ffmpeg::{executor, get_ffmpeg_path, get_ffprobe_path, keyframes, probe};
-use crate::models::{ExportProgress, ExportRequest, ExportResult};
 use crate::logger;
+use crate::types::export::{ExportProgress, ExportRequest, ExportResult};
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Instant;
 use tauri::{AppHandle, Emitter};
 
@@ -10,9 +13,10 @@ use tauri::{AppHandle, Emitter};
 pub async fn export_segments(
     app_handle: AppHandle,
     request: ExportRequest,
+    process_manager: tauri::State<'_, ProcessManager>,
 ) -> Result<ExportResult> {
     logger::log_info(&format!("Export started: {} segments from {}", request.segments.len(), request.video_path));
-    
+
     if !Path::new(&request.video_path).exists() {
         logger::log_error(&format!("Video file not found: {}", request.video_path));
         return Err(AppError::FileNotFound(request.video_path.clone()));
@@ -34,13 +38,15 @@ pub async fn export_segments(
 
     let ffmpeg_path = get_ffmpeg_path(&app_handle)?;
     let ffprobe_path = get_ffprobe_path(&app_handle)?;
-    let metadata = probe::probe_video(&ffprobe_path, &request.video_path)?;
+    let metadata = probe::probe_video(&ffprobe_path, &request.video_path, process_manager.inner()).await?;
 
-    let keyframes = probe::get_keyframes(&ffprobe_path, &request.video_path)?;
+    let keyframes = probe::get_keyframes(&ffprobe_path, &request.video_path, process_manager.inner()).await?;
 
     let total_segments = request.segments.len();
     let mut output_files = Vec::new();
     let ext = executor::get_output_extension(&request.video_path);
+
+    let process_manager = Arc::new((*process_manager).clone());
 
     let mut segment_times: Vec<f64> = Vec::new();
 
@@ -54,17 +60,16 @@ pub async fn export_segments(
             .audio_tracks
             .iter()
             .filter_map(|&track_idx| {
-                // track_idx is 1-based, convert to 0-based array index
                 if track_idx == 0 {
                     return None;
                 }
                 let array_idx = track_idx - 1;
-                let track = metadata.audio_tracks.get(array_idx)?;
-                Some(track.index)
+                metadata.audio_tracks.get(array_idx)?;
+                Some(track_idx)
             })
             .collect();
 
-        let selected_audio_tracks: Vec<&crate::models::AudioTrack> = segment
+        let selected_audio_tracks: Vec<&crate::types::metadata::AudioTrack> = segment
             .audio_tracks
             .iter()
             .filter_map(|&track_idx| {
@@ -149,7 +154,7 @@ pub async fn export_segments(
                     &ffmpeg_path,
                     &args,
                     export_duration,
-                    move |progress| {
+                    &mut move |progress| {
                         let avg_time_per_segment = if segment_times_len > 0 {
                             segment_times_avg
                         } else {
@@ -172,7 +177,8 @@ pub async fn export_segments(
                             },
                         );
                     },
-                )?;
+                    process_manager.as_ref(),
+                ).await?;
             }
             executor::CutMode::SmartCut { k1, k2, k3, k4, start_is_keyframe, end_is_keyframe } => {
                 executor::execute_smart_cut(
@@ -190,6 +196,7 @@ pub async fn export_segments(
                     &audio_stream_indices,
                     &selected_audio_tracks,
                     &metadata.video_codec,
+                    &process_manager.clone(),
                     move |progress| {
                         let avg_time_per_segment = if segment_times_len > 0 {
                             segment_times_avg
@@ -213,7 +220,7 @@ pub async fn export_segments(
                             },
                         );
                     },
-                )?;
+                ).await?;
             }
         }
 
@@ -223,7 +230,7 @@ pub async fn export_segments(
     }
 
     logger::log_info(&format!("Export completed: {} files generated", output_files.len()));
-    
+
     Ok(ExportResult {
         success: true,
         output_files,

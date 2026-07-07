@@ -1,16 +1,16 @@
+use crate::core::ffmpeg::hwaccel;
+use crate::core::process::ProcessManager;
 use crate::error::{AppError, Result};
-use crate::ffmpeg::hwaccel;
 use crate::logger::log_error;
-use crate::models::AudioTrack;
+use crate::types::metadata::AudioTrack;
 use regex::Regex;
 use std::collections::VecDeque;
-use std::io::{BufRead, BufReader};
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
+use std::sync::Arc;
 use std::{env, fs};
-
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
+use tokio::io::AsyncBufReadExt;
+use tokio::process::Command;
 
 const DEFAULT_X264_QP: u32 = 18;
 const DEFAULT_X265_QP: u32 = 18;
@@ -33,7 +33,7 @@ fn add_audio_mappings_with_metadata(
     args: &mut Vec<String>,
     audio_stream_indices: &[usize],
     audio_tracks: &[&AudioTrack],
-    is_generated_file: bool, // true for "0:a:{}", false for "0:{}"
+    is_generated_file: bool,
 ) {
     if audio_stream_indices.is_empty() {
         args.push("-an".to_string());
@@ -53,7 +53,6 @@ fn add_audio_mappings_with_metadata(
                 args.push(format!("0:{}", idx_to_use));
             }
 
-            // Add metadata for track name if available
             if let Some(track) = audio_tracks.get(output_idx) {
                 if let Some(name) = &track.name {
                     args.extend([
@@ -76,6 +75,7 @@ fn add_audio_mappings_with_metadata(
 const DEFAULT_X264_PRESET: &str = "medium";
 const DEFAULT_SVT_AV1_PRESET: &str = "6";
 
+#[derive(Debug, Clone)]
 pub enum CutMode {
     StreamCopy,
     SmartCut {
@@ -88,14 +88,15 @@ pub enum CutMode {
     },
 }
 
-pub fn execute_ffmpeg_with_progress<F>(
+pub async fn execute_ffmpeg_with_progress<'a, F>(
     ffmpeg_path: &Path,
     args: &[String],
     segment_duration: f64,
-    mut progress_callback: F,
+    progress_callback: &'a mut F,
+    process_manager: &ProcessManager,
 ) -> Result<()>
 where
-    F: FnMut(f64),
+    F: FnMut(f64) + Send,
 {
     let mut child = new_command(ffmpeg_path)
         .args(args)
@@ -103,37 +104,44 @@ where
         .spawn()
         .map_err(|e| AppError::FFmpegError(format!("Failed to spawn ffmpeg: {}", e)))?;
 
+    // Attach to ProcessManager for clean shutdown
+    process_manager.attach(&child)?;
+
     let stderr = child
         .stderr
         .take()
         .ok_or_else(|| AppError::FFmpegError("Failed to capture stderr".to_string()))?;
 
-    let reader = BufReader::new(stderr);
+    let reader = tokio::io::BufReader::new(stderr);
     let time_regex = Regex::new(r"time=(\d{2}):(\d{2}):(\d{2}\.\d{2})").unwrap();
 
     let mut log_buffer: VecDeque<String> = VecDeque::with_capacity(100);
-    for line in reader.lines() {
-        if let Ok(line) = line {
-            if let Some(caps) = time_regex.captures(&line) {
-                let hours: f64 = caps[1].parse().unwrap_or(0.0);
-                let minutes: f64 = caps[2].parse().unwrap_or(0.0);
-                let seconds: f64 = caps[3].parse().unwrap_or(0.0);
 
-                let current_time = hours * 3600.0 + minutes * 60.0 + seconds;
-                let progress = (current_time / segment_duration * 100.0).min(100.0);
+    let lines = reader.lines();
+    let mut lines = Box::pin(lines);
 
-                progress_callback(progress);
-            }
+    while let Ok(Some(result)) = lines.next_line().await {
+        let line: String = result;
+        if let Some(caps) = time_regex.captures(&line) {
+            let hours: f64 = caps[1].parse().unwrap_or(0.0);
+            let minutes: f64 = caps[2].parse().unwrap_or(0.0);
+            let seconds: f64 = caps[3].parse().unwrap_or(0.0);
 
-            log_buffer.push_back(line);
-            if log_buffer.len() > 100 {
-                log_buffer.pop_front();
-            }
+            let current_time = hours * 3600.0 + minutes * 60.0 + seconds;
+            let progress = (current_time / segment_duration * 100.0).min(100.0);
+
+            progress_callback(progress);
+        }
+
+        log_buffer.push_back(line);
+        if log_buffer.len() > 100 {
+            log_buffer.pop_front();
         }
     }
 
     let status = child
         .wait()
+        .await
         .map_err(|e| AppError::FFmpegError(format!("Failed to wait for ffmpeg: {}", e)))?;
 
     if !status.success() {
@@ -199,7 +207,7 @@ pub fn build_export_args(
 }
 
 /// Execute smart cut: 3-part approach (encode boundaries, copy middle, concat, trim)
-pub fn execute_smart_cut<F>(
+pub async fn execute_smart_cut<F>(
     ffmpeg_path: &Path,
     input_path: &str,
     output_path: &str,
@@ -214,13 +222,13 @@ pub fn execute_smart_cut<F>(
     audio_stream_indices: &[usize],
     audio_tracks: &[&AudioTrack],
     video_codec: &str,
+    process_manager: &Arc<ProcessManager>,
     mut progress_callback: F,
 ) -> Result<()>
 where
-    F: FnMut(f64),
+    F: FnMut(f64) + Send + 'static + Clone,
 {
-    // Detect hw capabilities
-    let caps = hwaccel::get_hw_capabilities(ffmpeg_path)?;
+    let caps = hwaccel::get_hw_capabilities(ffmpeg_path, process_manager.as_ref()).await?;
     let hwaccel_type = hwaccel::select_hwaccel(&caps);
     let encoder_chain = hwaccel::get_encoder_fallback_chain(video_codec, &caps);
     let decoder_chain = hwaccel::get_decoder_fallback_chain(video_codec, &caps);
@@ -249,6 +257,7 @@ where
 
     if !start_is_keyframe {
         let duration = k2 - k1;
+        let mut cb = progress_callback.clone();
 
         let encoder_used = encode_segment_with_fallback(
             ffmpeg_path,
@@ -263,8 +272,10 @@ where
             audio_tracks,
             video_codec,
             Some(format!("expr:gte(t,{:.3})", k2 - k1)),
-            |prog| progress_callback(current_progress + prog * 0.4),
-        )?;
+            move |prog| cb(current_progress + prog * 0.4),
+            process_manager,
+        )
+        .await?;
 
         working_encoder = Some(encoder_used);
         parts.push(temp_start_encode.to_str().unwrap().to_string());
@@ -298,9 +309,16 @@ where
         temp_middle_copy.to_str().unwrap().to_string(),
     ]);
 
-    execute_ffmpeg_with_progress(ffmpeg_path, &args_copy, copy_duration, |prog| {
-        progress_callback(current_progress + prog * 0.1);
-    })?;
+    execute_ffmpeg_with_progress(
+        ffmpeg_path,
+        &args_copy,
+        copy_duration,
+        &mut |prog| {
+            progress_callback(current_progress + prog * 0.1);
+        },
+        process_manager,
+    )
+    .await?;
 
     parts.push(temp_middle_copy.to_str().unwrap().to_string());
     current_progress = 50.0;
@@ -309,13 +327,13 @@ where
     if !end_is_keyframe {
         let duration = k4 - k3;
 
-        // Use memoized encoder if available, otherwise full chain
         let chain_to_use = if let Some(ref encoder) = working_encoder {
             vec![encoder.clone()]
         } else {
             encoder_chain.clone()
         };
 
+        let mut cb = progress_callback.clone();
         let encoder_used = encode_segment_with_fallback(
             ffmpeg_path,
             input_path,
@@ -329,10 +347,11 @@ where
             audio_tracks,
             video_codec,
             Some("expr:eq(n,0)".to_string()),
-            |prog| progress_callback(current_progress + prog * 0.4),
-        )?;
+            move |prog| cb(current_progress + prog * 0.4),
+            process_manager,
+        )
+        .await?;
 
-        // Update memoized encoder if this was first encode
         if working_encoder.is_none() {
             working_encoder = Some(encoder_used);
         }
@@ -379,21 +398,26 @@ where
         .spawn()
         .map_err(|e| AppError::FFmpegError(format!("Failed to spawn ffmpeg concat: {}", e)))?;
 
+    // Attach concat to ProcessManager for clean shutdown
+    process_manager.attach(&child)?;
+
     let stderr = child
         .stderr
         .take()
         .ok_or_else(|| AppError::FFmpegError("Failed to capture concat stderr".to_string()))?;
 
-    let reader = BufReader::new(stderr);
+    let reader = tokio::io::BufReader::new(stderr);
+    let lines = reader.lines();
+    let mut lines = Box::pin(lines);
+
     let mut concat_log = Vec::new();
-    for line in reader.lines() {
-        if let Ok(line) = line {
-            concat_log.push(line);
-        }
+    while let Ok(Some(line)) = lines.next_line().await {
+        concat_log.push(line);
     }
 
     let status = child
         .wait()
+        .await
         .map_err(|e| AppError::FFmpegError(format!("Failed to wait for concat: {}", e)))?;
 
     if !status.success() {
@@ -437,18 +461,26 @@ where
         output_path.to_string(),
     ]);
 
-    let status = new_command(ffmpeg_path)
+    // Trim subprocess - attach to ProcessManager for clean shutdown
+    let mut trim_child = new_command(ffmpeg_path)
         .args(&args_trim)
-        .stderr(Stdio::null())
-        .status()
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|e| AppError::FFmpegError(format!("Failed to spawn ffmpeg trim: {}", e)))?;
 
-    if !status.success() {
-        log_error(&format!("Trim failed with status: {}", status));
+    process_manager.attach(&trim_child)?;
+
+    let trim_status = trim_child
+        .wait()
+        .await
+        .map_err(|e| AppError::FFmpegError(format!("Failed to wait for trim: {}", e)))?;
+
+    if !trim_status.success() {
+        log_error(&format!("Trim failed with status: {}", trim_status));
 
         return Err(AppError::FFmpegError(format!(
             "Trim failed with status: {}",
-            status
+            trim_status
         )));
     }
 
@@ -463,7 +495,7 @@ where
     Ok(())
 }
 
-fn encode_segment_with_fallback<F>(
+async fn encode_segment_with_fallback<F>(
     ffmpeg_path: &Path,
     input_path: &str,
     output_path: &Path,
@@ -477,30 +509,26 @@ fn encode_segment_with_fallback<F>(
     video_codec: &str,
     force_keyframes: Option<String>,
     mut progress_callback: F,
+    process_manager: &Arc<ProcessManager>,
 ) -> Result<String>
 where
-    F: FnMut(f64),
+    F: FnMut(f64) + Send + 'static,
 {
     let mut last_error = None;
 
-    // Try each encoder
     for (enc_idx, encoder) in encoder_chain.iter().enumerate() {
-        // Try each decoder for this encoder
         for (dec_idx, decoder) in decoder_chain.iter().enumerate() {
             let mut args = vec![];
 
-            // Add hwaccel + decoder only if hw decoder specified
             let is_hw_decoder = decoder.as_ref().map_or(false, |d| d.contains("cuvid"));
 
             if is_hw_decoder {
                 args.extend(hwaccel::build_hwaccel_args(hwaccel_type));
 
-                // Add explicit hw decoder
                 if let Some(dec) = decoder {
                     args.extend(["-c:v".to_string(), dec.clone()])
                 }
             } else if let Some(dec) = decoder {
-                // Software decoder like libdav1d - no hwaccel needed
                 args.extend(["-c:v".to_string(), dec.clone()])
             }
 
@@ -537,7 +565,14 @@ where
                 output_path.to_str().unwrap().to_string(),
             ]);
 
-            match execute_ffmpeg_with_progress(ffmpeg_path, &args, duration, &mut progress_callback)
+            match execute_ffmpeg_with_progress(
+                ffmpeg_path,
+                &args,
+                duration,
+                &mut progress_callback,
+                process_manager,
+            )
+            .await
             {
                 Ok(_) => {
                     return Ok(encoder.clone());
@@ -545,7 +580,6 @@ where
                 Err(e) => {
                     last_error = Some(e);
 
-                    // Clean up failed output
                     let _ = fs::remove_file(output_path);
 
                     if dec_idx + 1 >= decoder_chain.len() && enc_idx + 1 >= encoder_chain.len() {
@@ -553,7 +587,7 @@ where
                     }
 
                     if dec_idx + 1 >= decoder_chain.len() {
-                        break; // Move to next encoder
+                        break;
                     }
                 }
             }
@@ -569,14 +603,12 @@ where
 
 fn add_encoder_params(args: &mut Vec<String>, encoder: &str, _video_codec: &str) {
     match encoder {
-        "h264_nvenc" | "hevc_nvenc" | "av1_nvenc" => {
-            args.extend([
-                "-preset".to_string(),
-                "p4".to_string(), // Medium quality/speed
-                "-cq".to_string(),
-                DEFAULT_X264_QP.to_string(),
-            ])
-        }
+        "h264_nvenc" | "hevc_nvenc" | "av1_nvenc" => args.extend([
+            "-preset".to_string(),
+            "p4".to_string(),
+            "-cq".to_string(),
+            DEFAULT_X264_QP.to_string(),
+        ]),
         "libx264" | "libx265" => args.extend([
             "-preset".to_string(),
             DEFAULT_X264_PRESET.to_string(),

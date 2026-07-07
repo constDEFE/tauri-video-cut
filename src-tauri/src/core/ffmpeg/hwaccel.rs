@@ -1,14 +1,12 @@
+use crate::core::process::ProcessManager;
 use crate::error::{AppError, Result};
 use crate::logger::log_error;
 use std::collections::HashSet;
 use std::path::Path;
-use std::process::Command;
+use std::process::Stdio;
 use std::sync::Mutex;
+use tokio::process::Command;
 
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
-
-#[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 fn new_command(program: &Path) -> Command {
@@ -27,11 +25,13 @@ pub struct HwCapabilities {
     pub hwaccels: HashSet<String>,
 }
 
+unsafe impl Send for HwCapabilities {}
+
 impl HwCapabilities {
-    pub fn detect(ffmpeg_path: &Path) -> Result<Self> {
-        let encoders = detect_encoders(ffmpeg_path)?;
-        let decoders = detect_decoders(ffmpeg_path)?;
-        let hwaccels = detect_hwaccels(ffmpeg_path)?;
+    pub async fn detect(ffmpeg_path: &Path, process_manager: &ProcessManager) -> Result<Self> {
+        let encoders = detect_encoders(ffmpeg_path, process_manager).await?;
+        let decoders = detect_decoders(ffmpeg_path, process_manager).await?;
+        let hwaccels = detect_hwaccels(ffmpeg_path, process_manager).await?;
 
         Ok(Self {
             encoders,
@@ -53,22 +53,49 @@ impl HwCapabilities {
     }
 }
 
-pub fn get_hw_capabilities(ffmpeg_path: &Path) -> Result<HwCapabilities> {
-    let mut cache = HW_CAPABILITIES.lock().unwrap();
-
-    if let Some(caps) = cache.as_ref() {
-        return Ok(caps.clone());
+pub async fn get_hw_capabilities(
+    ffmpeg_path: &Path,
+    process_manager: &ProcessManager,
+) -> Result<HwCapabilities> {
+    {
+        let cache = HW_CAPABILITIES.lock().unwrap();
+        if let Some(caps) = cache.as_ref() {
+            return Ok(caps.clone());
+        }
     }
 
-    let caps = HwCapabilities::detect(ffmpeg_path)?;
-    *cache = Some(caps.clone());
+    let caps = HwCapabilities::detect(ffmpeg_path, process_manager).await?;
+
+    {
+        let mut cache = HW_CAPABILITIES.lock().unwrap();
+        *cache = Some(caps.clone());
+    }
+
     Ok(caps)
 }
 
-fn detect_encoders(ffmpeg_path: &Path) -> Result<HashSet<String>> {
-    let output = new_command(ffmpeg_path)
+async fn detect_encoders(
+    ffmpeg_path: &Path,
+    process_manager: &ProcessManager,
+) -> Result<HashSet<String>> {
+    let child = new_command(ffmpeg_path)
         .args(&["-encoders", "-hide_banner"])
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            AppError::FFmpegError(format!(
+                "Failed to spawn ffmpeg for encoder detection: {}",
+                e
+            ))
+        })?;
+
+    // Attach ffmpeg to ProcessManager for clean shutdown
+    process_manager.attach(&child)?;
+
+    let output = child
+        .wait_with_output()
+        .await
         .map_err(|e| AppError::FFmpegError(format!("Failed to detect encoders: {}", e)))?;
 
     if !output.status.success() {
@@ -82,14 +109,11 @@ fn detect_encoders(ffmpeg_path: &Path) -> Result<HashSet<String>> {
     let mut encoders = HashSet::new();
 
     for line in stdout.lines() {
-        // Skip header lines
         if line.contains('=') || line.contains("---") {
             continue;
         }
 
-        // Format: " V..... libx264              libx264 H.264..."
         if line.starts_with(" V") || line.starts_with(" A") {
-            // Skip first 8 chars (" V.....")
             if line.len() > 8 {
                 let remainder = &line[8..];
                 let encoder_name = remainder.split_whitespace().next();
@@ -103,10 +127,28 @@ fn detect_encoders(ffmpeg_path: &Path) -> Result<HashSet<String>> {
     Ok(encoders)
 }
 
-fn detect_decoders(ffmpeg_path: &Path) -> Result<HashSet<String>> {
-    let output = new_command(ffmpeg_path)
+async fn detect_decoders(
+    ffmpeg_path: &Path,
+    process_manager: &ProcessManager,
+) -> Result<HashSet<String>> {
+    let child = new_command(ffmpeg_path)
         .args(&["-decoders", "-hide_banner"])
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            AppError::FFmpegError(format!(
+                "Failed to spawn ffmpeg for decoder detection: {}",
+                e
+            ))
+        })?;
+
+    // Attach ffmpeg to ProcessManager for clean shutdown
+    process_manager.attach(&child)?;
+
+    let output = child
+        .wait_with_output()
+        .await
         .map_err(|e| AppError::FFmpegError(format!("Failed to detect decoders: {}", e)))?;
 
     if !output.status.success() {
@@ -120,18 +162,13 @@ fn detect_decoders(ffmpeg_path: &Path) -> Result<HashSet<String>> {
     let mut decoders = HashSet::new();
 
     for line in stdout.lines() {
-        // Format: " V..... libdav1d             dav1d AV1 decoder..."
-        // Skip header lines (contain "=" or "------")
         if line.contains('=') || line.contains("---") {
             continue;
         }
 
         if line.starts_with(" V") || line.starts_with(" A") {
-            // Split and take first token after the flags
-            // Line format: " V..... <name> <description...>"
-            // Remove leading space and flags (first 7 chars)
             if line.len() > 8 {
-                let remainder = &line[8..]; // Skip " V....."
+                let remainder = &line[8..];
                 let decoder_name = remainder.split_whitespace().next();
                 if let Some(name) = decoder_name {
                     decoders.insert(name.to_string());
@@ -143,10 +180,28 @@ fn detect_decoders(ffmpeg_path: &Path) -> Result<HashSet<String>> {
     Ok(decoders)
 }
 
-fn detect_hwaccels(ffmpeg_path: &Path) -> Result<HashSet<String>> {
-    let output = new_command(ffmpeg_path)
+async fn detect_hwaccels(
+    ffmpeg_path: &Path,
+    process_manager: &ProcessManager,
+) -> Result<HashSet<String>> {
+    let child = new_command(ffmpeg_path)
         .args(&["-hwaccels", "-hide_banner"])
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            AppError::FFmpegError(format!(
+                "Failed to spawn ffmpeg for hwaccel detection: {}",
+                e
+            ))
+        })?;
+
+    // Attach ffmpeg to ProcessManager for clean shutdown
+    process_manager.attach(&child)?;
+
+    let output = child
+        .wait_with_output()
+        .await
         .map_err(|e| AppError::FFmpegError(format!("Failed to detect hwaccels: {}", e)))?;
 
     if !output.status.success() {
@@ -207,7 +262,6 @@ pub fn get_encoder_fallback_chain(codec: &str, caps: &HwCapabilities) -> Vec<Str
         }
     }
 
-    // Ultimate fallback
     if chain.is_empty() {
         chain.push("libx264".to_string());
     }
@@ -232,7 +286,6 @@ pub fn get_decoder_fallback_chain(codec: &str, caps: &HwCapabilities) -> Vec<Opt
         }
     }
 
-    // Always add None as final fallback (use default decoder)
     chain.push(None);
 
     chain
