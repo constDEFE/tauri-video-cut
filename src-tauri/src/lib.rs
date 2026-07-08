@@ -12,6 +12,28 @@ use core::process::ProcessManager;
 use models::AppConfig;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
+/// Clean up orphaned temp segment files left by crashed exports.
+fn cleanup_orphaned_temp_segments() {
+    let temp_dir = std::env::temp_dir()
+        .join("io.github.constdefe.tauri-video-cut")
+        .join("temp_segments");
+
+    if !temp_dir.exists() {
+        return;
+    }
+
+    if let Ok(entries) = std::fs::read_dir(&temp_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if let Ok(metadata) = entry.metadata() {
+                if metadata.is_file() {
+                    let _ = std::fs::remove_file(&path);
+                }
+            }
+        }
+    }
+}
+
 fn add_lib_to_dll_search_path() {
     use std::iter::once;
     use std::os::windows::ffi::OsStrExt;
@@ -34,8 +56,9 @@ fn add_lib_to_dll_search_path() {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    add_lib_to_dll_search_path();
     logger::init();
+    add_lib_to_dll_search_path();
+    cleanup_orphaned_temp_segments();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_libmpv::init())

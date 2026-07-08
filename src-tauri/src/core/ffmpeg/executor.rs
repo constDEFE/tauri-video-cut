@@ -5,7 +5,7 @@ use crate::logger::log_error;
 use crate::types::metadata::AudioTrack;
 use regex::Regex;
 use std::collections::VecDeque;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::{env, fs};
@@ -74,6 +74,25 @@ fn add_audio_mappings_with_metadata(
 
 const DEFAULT_X264_PRESET: &str = "medium";
 const DEFAULT_SVT_AV1_PRESET: &str = "6";
+
+/// RAII guard that cleans up all temp files on drop (success or panic).
+pub struct TempCleanup {
+    paths: Vec<PathBuf>,
+}
+
+impl TempCleanup {
+    pub fn new(paths: Vec<PathBuf>) -> Self {
+        Self { paths }
+    }
+}
+
+impl Drop for TempCleanup {
+    fn drop(&mut self) {
+        for p in &self.paths {
+            let _ = fs::remove_file(p);
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum CutMode {
@@ -249,6 +268,14 @@ where
     let temp_middle_copy = temp_dir.join(format!("middle_copy_{}.{}", timestamp, ext));
     let temp_end_encode = temp_dir.join(format!("end_encode_{}.{}", timestamp, ext));
     let temp_concat = temp_dir.join(format!("concat_{}.{}", timestamp, ext));
+
+    // RAII guard: cleans up all temp files on drop (success or panic).
+    let _cleanup = TempCleanup::new(vec![
+        temp_start_encode.clone(),
+        temp_middle_copy.clone(),
+        temp_end_encode.clone(),
+        temp_concat.clone(),
+    ]);
 
     // Part 1: Encode K1->K2 if start not on keyframe (40% progress)
     let mut parts = Vec::new();
@@ -486,10 +513,6 @@ where
 
     progress_callback(100.0);
 
-    let _ = fs::remove_file(&temp_start_encode);
-    let _ = fs::remove_file(&temp_middle_copy);
-    let _ = fs::remove_file(&temp_end_encode);
-    let _ = fs::remove_file(&temp_concat);
     let _ = fs::remove_file(&concat_list);
 
     Ok(())
