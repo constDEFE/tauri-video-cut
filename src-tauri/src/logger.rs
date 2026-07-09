@@ -41,7 +41,7 @@ pub fn init() {
     rotate_logs(&log_dir);
 
     let timestamp = chrono::Local::now().format("%Y-%m-%d");
-    let log_path = log_dir.join(format!("videocut-{}.log", timestamp));
+    let log_path = log_dir.join(format!("{}.log", timestamp));
 
     if let Ok(file) = OpenOptions::new()
         .create(true)
