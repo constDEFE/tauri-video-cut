@@ -52,6 +52,7 @@ pub async fn export_segments(
 
     for (idx, segment) in request.segments.iter().enumerate() {
         let segment_start = Instant::now();
+        let mut ema_eta: f64 = 0.0; // exponential moving average for ETA
 
         let output_filename = format!("{}-{:03}.{}", request.file_prefix, idx + 1, ext);
         let output_path = Path::new(&request.output_folder).join(&output_filename);
@@ -155,17 +156,25 @@ pub async fn export_segments(
                     &args,
                     export_duration,
                     &mut move |progress| {
+                        // Use EMA for stable ETA; avoid division by near-zero progress
+                        if segment_times_len == 0 && progress > 1.0 {
+                            ema_eta = segment_start.elapsed().as_secs_f64() * 100.0 / progress;
+                        } else if progress > 1.0 {
+                            ema_eta = 0.9 * ema_eta + 0.1 * (segment_start.elapsed().as_secs_f64() * 100.0 / progress);
+                        }
                         let avg_time_per_segment = if segment_times_len > 0 {
                             segment_times_avg
+                        } else if ema_eta > 0.0 {
+                            ema_eta
                         } else {
-                            segment_start.elapsed().as_secs_f64() / (progress / 100.0).max(0.01)
+                            0.0
                         };
 
                         let current_segment_remaining =
-                            (100.0 - progress) / 100.0 * avg_time_per_segment;
+                            (100.0 - progress).max(0.0) / 100.0 * avg_time_per_segment;
                         let remaining_segments = (total_segments - current_segment) as f64;
                         let eta =
-                            current_segment_remaining + (remaining_segments * avg_time_per_segment);
+                            current_segment_remaining.max(0.0) + (remaining_segments * avg_time_per_segment);
 
                         let _ = app_handle_clone.emit(
                             "export-progress",
@@ -198,17 +207,25 @@ pub async fn export_segments(
                     &metadata.video_codec,
                     &process_manager.clone(),
                     move |progress| {
+                        // Use EMA for stable ETA; avoid division by near-zero progress
+                        if segment_times_len == 0 && progress > 1.0 {
+                            ema_eta = segment_start.elapsed().as_secs_f64() * 100.0 / progress;
+                        } else if progress > 1.0 {
+                            ema_eta = 0.9 * ema_eta + 0.1 * (segment_start.elapsed().as_secs_f64() * 100.0 / progress);
+                        }
                         let avg_time_per_segment = if segment_times_len > 0 {
                             segment_times_avg
+                        } else if ema_eta > 0.0 {
+                            ema_eta
                         } else {
-                            segment_start.elapsed().as_secs_f64() / (progress / 100.0).max(0.01)
+                            0.0
                         };
 
                         let current_segment_remaining =
-                            (100.0 - progress) / 100.0 * avg_time_per_segment;
+                            (100.0 - progress).max(0.0) / 100.0 * avg_time_per_segment;
                         let remaining_segments = (total_segments - current_segment) as f64;
                         let eta =
-                            current_segment_remaining + (remaining_segments * avg_time_per_segment);
+                            current_segment_remaining.max(0.0) + (remaining_segments * avg_time_per_segment);
 
                         let _ = app_handle_clone.emit(
                             "export-progress",

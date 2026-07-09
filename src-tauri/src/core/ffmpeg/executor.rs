@@ -277,7 +277,20 @@ where
         temp_concat.clone(),
     ]);
 
-    // Part 1: Encode K1->K2 if start not on keyframe (40% progress)
+    // Calculate work weights based on segment durations (encoding is ~10x slower than copy)
+    let encoding_weight = 10.0; // heuristic: encoding takes ~10x longer than stream copy
+    let total_work = if !start_is_keyframe { k2 - k1 } else { 0.0 }
+        + (k3 - k2)
+        + if !end_is_keyframe { k4 - k3 } else { 0.0 };
+
+    let start_work = if !start_is_keyframe { k2 - k1 } else { 0.0 };
+    let middle_work = k3 - k2;
+    let end_work = if !end_is_keyframe { k4 - k3 } else { 0.0 };
+
+    let start_weight = if !start_is_keyframe { start_work * encoding_weight / total_work } else { 0.0 };
+    let middle_weight = middle_work / total_work;
+    let end_weight = if !end_is_keyframe { end_work * encoding_weight / total_work } else { 0.0 };
+
     let mut parts = Vec::new();
     let mut current_progress = 0.0;
     let mut working_encoder: Option<String> = None;
@@ -299,14 +312,14 @@ where
             audio_tracks,
             video_codec,
             Some(format!("expr:gte(t,{:.3})", k2 - k1)),
-            move |prog| cb(current_progress + prog * 0.4),
+            move |prog| cb(current_progress + prog * start_weight),
             process_manager,
         )
         .await?;
 
         working_encoder = Some(encoder_used);
         parts.push(temp_start_encode.to_str().unwrap().to_string());
-        current_progress = 40.0;
+        current_progress += start_weight;
     }
 
     // Part 2: Copy K2->K3 (middle, lossless)
@@ -341,14 +354,14 @@ where
         &args_copy,
         copy_duration,
         &mut |prog| {
-            progress_callback(current_progress + prog * 0.1);
+            progress_callback(current_progress + prog * middle_weight);
         },
         process_manager,
     )
     .await?;
 
     parts.push(temp_middle_copy.to_str().unwrap().to_string());
-    current_progress = 50.0;
+    current_progress += middle_weight;
 
     // Part 3: Encode K3->K4 if end not on keyframe
     if !end_is_keyframe {
@@ -374,7 +387,7 @@ where
             audio_tracks,
             video_codec,
             Some("expr:eq(n,0)".to_string()),
-            move |prog| cb(current_progress + prog * 0.4),
+            move |prog| cb(current_progress + prog * end_weight),
             process_manager,
         )
         .await?;
@@ -461,9 +474,12 @@ where
         )));
     }
 
-    progress_callback(95.0);
+    let concat_weight = 0.02; // concat is fast
+    let trim_weight = 0.03;   // trim is fast
+    
+    progress_callback(current_progress + concat_weight);
 
-    // Part 5: Trim to exact start/end (5% progress)
+    // Part 5: Trim to exact start/end
 
     let trim_start = if start_is_keyframe { 0.0 } else { start - k1 };
     let trim_duration = end - start;
@@ -511,7 +527,7 @@ where
         )));
     }
 
-    progress_callback(100.0);
+    progress_callback(current_progress + concat_weight + trim_weight);
 
     let _ = fs::remove_file(&concat_list);
 
