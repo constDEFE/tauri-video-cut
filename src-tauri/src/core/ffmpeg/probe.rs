@@ -30,6 +30,7 @@ struct FFprobeStream {
     id: Option<String>,
     codec_type: String,
     codec_name: String,
+    duration: Option<String>,
     #[serde(default)]
     width: Option<u32>,
     #[serde(default)]
@@ -72,8 +73,12 @@ pub async fn probe_video(
 ) -> Result<VideoMetadata> {
     let child = new_command(ffprobe_path)
         .args(&[
-            "-v", "quiet", "-print_format", "json",
-            "-show_entries", "format=duration,bit_rate:stream=id,index,codec_type,codec_name,r_frame_rate,width,height,channels:stream_tags=title",
+            "-loglevel", "error",
+            "-hide_banner",
+            "-fflags", "nobuffer",
+            "-read_intervals", "0%+#10",
+            "-print_format", "json",
+            "-show_entries", "format=duration,bit_rate:stream=id,index,codec_type,codec_name,duration,r_frame_rate,width,height,channels:stream_tags=title",
             video_path,
         ])
         .stdout(Stdio::piped())
@@ -106,10 +111,15 @@ pub async fn probe_video(
         )));
     }
 
-    parse_probe_output(&output.stdout, video_path)
+    parse_probe_output(&output.stdout, video_path, ffprobe_path, process_manager).await
 }
 
-fn parse_probe_output(stdout: &[u8], video_path: &str) -> Result<VideoMetadata> {
+async fn parse_probe_output(
+    stdout: &[u8],
+    video_path: &str,
+    ffprobe_path: &Path,
+    process_manager: &ProcessManager,
+) -> Result<VideoMetadata> {
     let probe_data: FFprobeOutput = serde_json::from_slice(stdout).map_err(|e| {
         log_error(&format!("Failed to parse ffprobe output: {}", e));
         AppError::FFprobeError(format!("Failed to parse ffprobe output: {}", e))
@@ -124,15 +134,32 @@ fn parse_probe_output(stdout: &[u8], video_path: &str) -> Result<VideoMetadata> 
             AppError::InvalidVideo("No video stream found".to_string())
         })?;
 
-    let duration = probe_data
+    let mut duration = probe_data
         .format
         .duration
-        .as_ref()
+        .as_deref()
         .and_then(|d| d.parse::<f64>().ok())
-        .ok_or_else(|| {
-            log_warn("Could not determine video duration");
-            AppError::InvalidVideo("Could not determine video duration".to_string())
-        })?;
+        .or_else(|| {
+            probe_data
+                .streams
+                .first()?
+                .duration
+                .as_deref()?
+                .parse::<f64>()
+                .ok()
+        });
+
+    // FALLBACK REVERSE SEEK: If duration is missing or 0.0 (due to corrupt headers)
+    if duration.is_none() || duration == Some(0.0) {
+        log_warn("FFprobe header duration missing. Executing reverse-seek to EOF...");
+        duration =
+            get_fallback_duration_reverse_seek(ffprobe_path, video_path, process_manager).await;
+    }
+
+    let duration = duration.ok_or_else(|| {
+        log_warn("Could not determine video duration");
+        AppError::InvalidVideo("Could not determine video duration".to_string())
+    })?;
 
     let bitrate = probe_data
         .format
@@ -198,6 +225,76 @@ fn parse_probe_output(stdout: &[u8], video_path: &str) -> Result<VideoMetadata> 
         fps,
         audio_tracks,
     })
+}
+
+async fn get_fallback_duration_reverse_seek(
+    ffprobe_path: &Path,
+    video_path: &str,
+    process_manager: &ProcessManager,
+) -> Option<f64> {
+    let child = match new_command(ffprobe_path)
+        .args(&[
+            "-loglevel",
+            "error",
+            "-hide_banner",
+            "-read_intervals",
+            // Seek as close to EOF as ffprobe allows and read ~1 second of packets.
+            // This is used as a fallback when the container duration metadata is missing.
+            // The huge percentage is intentionally used to clamp the seek near EOF.
+            "999999%+#1",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "packet=pts_time,duration_time",
+            "-of",
+            "csv=p=0",
+            video_path,
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(_) => return None,
+    };
+
+    let _ = process_manager.attach(&child);
+
+    let output = child.wait_with_output().await.ok()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        log_error(&format!(
+            "FFprobe failed at {:?}\nstderr: {}\nstdout: {}",
+            ffprobe_path, stderr, stdout
+        ));
+
+        return None;
+    }
+
+    let stdout = String::from_utf8(output.stdout).ok()?;
+
+    let mut max_time = None::<f64>;
+
+    for line in stdout.lines() {
+        let mut parts = line.split(',');
+
+        let Some(pts) = parts.next().and_then(|v| v.parse::<f64>().ok()) else {
+            continue;
+        };
+
+        let duration = parts
+            .next()
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(0.0);
+
+        let end = pts + duration;
+
+        max_time = Some(max_time.map_or(end, |m| m.max(end)));
+    }
+
+    max_time
 }
 
 pub async fn get_keyframes(
