@@ -4,15 +4,16 @@ mod core;
 mod error;
 mod logger;
 mod models;
+mod session;
 mod types;
 mod utils;
 
 use commands::{export, metadata};
 use core::process::ProcessManager;
 use models::AppConfig;
+use session::{load_session, save_session};
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
-/// Clean up orphaned temp segment files left by crashed exports.
 fn cleanup_orphaned_temp_segments() {
     let temp_dir = std::env::temp_dir()
         .join("io.github.constdefe.tauri-video-cut")
@@ -74,11 +75,15 @@ pub fn run() {
             export::export_segments,
             set_app_config,
             set_app_config_var,
-            cancel_all_tasks
+            cancel_all_tasks,
+            set_session,
         ])
         .setup(|app| {
             let config = config::load_config(app.app_handle()).unwrap_or_default();
             let config_json = serde_json::to_string(&config).unwrap_or_default();
+
+            let session = load_session(app.app_handle());
+            let session_json = serde_json::to_string(&session).unwrap_or_default();
 
             let _window = WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
                 .title("VideoCut")
@@ -87,7 +92,7 @@ pub fn run() {
                 .drag_and_drop(true)
                 .transparent(true)
                 .visible(false)
-                .initialization_script(&format!("window.__CONFIG__ = {};", config_json))
+                .initialization_script(&format!("window.__CONFIG__={};window.__SESSION__={};", config_json, session_json))
                 .build();
 
             #[cfg(debug_assertions)]
@@ -119,6 +124,13 @@ async fn set_app_config_var(
     value: serde_json::Value,
 ) -> Result<(), String> {
     config::set_app_config_var(&app, &key, value)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn set_session(app: tauri::AppHandle, session: session::Session) -> Result<(), String> {
+    save_session(&app, &session)
         .await
         .map_err(|e| e.to_string())
 }

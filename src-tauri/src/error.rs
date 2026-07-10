@@ -28,6 +28,9 @@ pub enum AppError {
 
     #[error("Export failed: {0}")]
     ExportError(String),
+
+    #[error("{0}")]
+    Other(String),
 }
 
 impl serde::Serialize for AppError {

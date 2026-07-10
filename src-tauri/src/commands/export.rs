@@ -1,9 +1,10 @@
 use crate::core::ffmpeg::{executor, keyframes, probe};
-use crate::utils::paths::{get_ffmpeg_path, get_ffprobe_path};
 use crate::core::process::ProcessManager;
 use crate::error::{AppError, Result};
 use crate::logger;
+use crate::session::blank_session;
 use crate::types::export::{ExportProgress, ExportRequest, ExportResult};
+use crate::utils::paths::{get_ffmpeg_path, get_ffprobe_path};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
@@ -246,7 +247,14 @@ pub async fn export_segments(
         logger::log_info(&format!("Segment {}/{} exported successfully", idx + 1, total_segments));
     }
 
-    logger::log_info(&format!("Export completed: {} files generated", output_files.len()));
+    logger::log_info(&format!(
+        "Export completed: {} files generated",
+        output_files.len()
+    ));
+
+    if let Err(e) = blank_session(&app_handle).await {
+        logger::log_error(&format!("Failed to blank session after export: {}", e));
+    }
 
     Ok(ExportResult {
         success: true,
