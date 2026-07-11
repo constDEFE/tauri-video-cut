@@ -1,7 +1,7 @@
 import { Navigate } from "react-router";
 
 import { useVideoStore } from "@/entities/video";
-import { ImportArea } from "@/widgets/import-area";
+import { ImportArea } from "@/features/import";
 
 export const ImportPage = () => {
 	const isLoaded = useVideoStore((s) => s.state.isLoaded);

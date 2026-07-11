@@ -14,6 +14,7 @@ type State = {
 	timeline: {
 		cursor: number;
 	};
+	sessionCb: (() => void) | null;
 	filePath: string | null;
 	metadata: VideoMetadata | null;
 	isLoaded: boolean;
@@ -38,7 +39,7 @@ type Actions = {
 	timeline: {
 		setCursor: (position: number) => void;
 	};
-	setVideo: (filePath: string, metadata: VideoMetadata) => void;
+	setVideo: (filePath: string, metadata: VideoMetadata, sessionCb: (() => void) | null) => void;
 	reset: () => void;
 };
 
@@ -60,6 +61,7 @@ const INITIAL_STATE: State = {
 	timeline: {
 		cursor: 0
 	},
+	sessionCb: null,
 	filePath: null,
 	metadata: null,
 	isLoaded: false
@@ -108,7 +110,7 @@ export const useVideoStore = create<VideoStore>((set, get) => ({
 				set((s) => ({ state: { ...s.state, timeline: { cursor: position } } }));
 			}
 		},
-		setVideo: (filePath, metadata) => {
+		setVideo: (filePath, metadata, sessionCb = null) => {
 			const store = get();
 
 			store.private._audioTracksMap.clear();
@@ -122,6 +124,7 @@ export const useVideoStore = create<VideoStore>((set, get) => ({
 					...s.state,
 					filePath,
 					metadata,
+					sessionCb: sessionCb,
 					isLoaded: true,
 					player: { ...s.state.player, selectedAudio: metadata.audio_tracks[0]?.index ?? 0 }
 				}

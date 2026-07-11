@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from "preact/hooks";
+import { useCallback, useEffect, useRef } from "preact/hooks";
 import { toast } from "sonner";
 import { useShallow } from "zustand/shallow";
 
@@ -9,10 +9,13 @@ import type { VideoStore } from "@/entities/video";
 import type { MpvPropertyEvent } from "@/shared/lib/mpv";
 import type { MpvEvent } from "tauri-plugin-libmpv-api";
 
+const SS_HAS_SESSION_CB_FIRED = "has-session-cb-fired";
+
 const SELECT_VIDEO_STATE = (s: VideoStore) => ({
 	filePath: s.state.filePath,
 	isInitialized: s.state.player.isInitialized,
-	isFileLoaded: s.state.player.isFileLoaded
+	isFileLoaded: s.state.player.isFileLoaded,
+	sessionCb: s.state.sessionCb
 });
 
 const SELECT_VIDEO_ACTIONS = (s: VideoStore) => ({
@@ -26,9 +29,11 @@ const SELECT_VIDEO_ACTIONS = (s: VideoStore) => ({
 });
 
 export const usePlayer = () => {
-	const { filePath, isInitialized, isFileLoaded } = useVideoStore(useShallow(SELECT_VIDEO_STATE));
+	const { filePath, isInitialized, isFileLoaded, sessionCb } = useVideoStore(useShallow(SELECT_VIDEO_STATE));
 	const { setPlayerInitialized, setPlayerFileLoaded, setAudioTrack, setPlaying, toggleMuted, setVolume, setCursor } =
 		useVideoStore(useShallow(SELECT_VIDEO_ACTIONS));
+
+	const hasSessionCbFiredRef = useRef(sessionStorage.getItem(SS_HAS_SESSION_CB_FIRED) === "true");
 
 	/* init player */
 	useEffect(() => {
@@ -69,6 +74,11 @@ export const usePlayer = () => {
 				return setPlayerFileLoaded(false);
 			case "file-loaded":
 				setPlayerFileLoaded(true);
+
+				if (!hasSessionCbFiredRef.current) {
+					sessionCb?.();
+				}
+
 				break;
 		}
 		// eslint-disable-next-line react-hooks/exhaustive-deps

@@ -2,6 +2,7 @@ import { useHotkeys } from "@tanstack/react-hotkeys";
 import { nanoid } from "nanoid";
 
 import { useSegmentsStore } from "@/entities/segments";
+import { useSessionStore } from "@/entities/session";
 import { calculateEstimatedSize, useVideoStore } from "@/entities/video";
 import { PlusIcon } from "@/shared/ui/icons";
 import { invariant } from "@/shared/utils";
@@ -10,6 +11,7 @@ import type { Segment } from "@/entities/segments";
 
 export const AddSegmentButton = () => {
 	const add = useSegmentsStore((s) => s.actions.add);
+	const updateSession = useSessionStore((s) => s.actions.updateSession);
 	const metadata = useVideoStore((s) => s.state.metadata);
 
 	const handleAdd = () => {
@@ -24,6 +26,7 @@ export const AddSegmentButton = () => {
 		};
 
 		add(newSegment);
+		updateSession({ segments: useSegmentsStore.getState().state.segments });
 	};
 
 	useHotkeys([

@@ -2,6 +2,7 @@ import { useHotkeys } from "@tanstack/react-hotkeys";
 import { useShallow } from "zustand/shallow";
 
 import { useSegmentsStore } from "@/entities/segments";
+import { useSessionStore } from "@/entities/session";
 import { useVideoStore, type VideoStore } from "@/entities/video";
 import { frameBackStep, frameStep, seekBackward, seekForward } from "@/shared/lib/mpv";
 import { NextIcon, PrevIcon } from "@/shared/ui/icons";
@@ -38,6 +39,7 @@ const SELECT_VIDEO = (s: VideoStore) => ({
 export const Playback = () => {
 	const { getSegment, selectedId, updateSegment } = useSegmentsStore(useShallow(SELECT_SEGMENT));
 	const { metadata, isDisabled, cursor } = useVideoStore(useShallow(SELECT_VIDEO));
+	const updateSession = useSessionStore((s) => s.actions.updateSession);
 
 	const handleSegment = (type: Parameters<typeof newDuration>[0]) => {
 		invariant(metadata);
@@ -52,6 +54,7 @@ export const Playback = () => {
 			duration: duration,
 			estimatedSize: newEstimatedSize
 		});
+		updateSession({ segments: useSegmentsStore.getState().state.segments });
 	};
 
 	useHotkeys(

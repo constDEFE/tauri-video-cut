@@ -1,4 +1,4 @@
-import type { AppConfig } from "@/entities/config";
+import type { AppConfig } from "./types";
 
 declare global {
 	interface Window {

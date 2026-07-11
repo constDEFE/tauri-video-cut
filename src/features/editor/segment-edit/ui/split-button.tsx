@@ -2,6 +2,7 @@ import { useHotkeys } from "@tanstack/react-hotkeys";
 import { useShallow } from "zustand/shallow";
 
 import { useSegmentsStore } from "@/entities/segments";
+import { useSessionStore } from "@/entities/session";
 import { useVideoStore } from "@/entities/video";
 import { SplitIcon } from "@/shared/ui/icons";
 
@@ -16,6 +17,7 @@ export const SplitSegmentButton = () => {
 	const { split, getSegment } = useSegmentsStore(useShallow(SELECT_SEGMENTS_ACTIONS));
 	const selectedId = useSegmentsStore((s) => s.state.selectedId);
 	const cursor = useVideoStore((s) => s.state.timeline.cursor);
+	const updateSession = useSessionStore((s) => s.actions.updateSession);
 
 	const segment = getSegment(selectedId);
 	const canSplit = segment && cursor > segment.start && cursor < segment.end;
@@ -26,6 +28,7 @@ export const SplitSegmentButton = () => {
 		}
 
 		split(selectedId, cursor);
+		updateSession({ segments: useSegmentsStore.getState().state.segments });
 	};
 
 	useHotkeys([

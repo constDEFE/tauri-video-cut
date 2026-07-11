@@ -2,6 +2,7 @@ import { useHotkeys } from "@tanstack/react-hotkeys";
 import { useShallow } from "zustand/shallow";
 
 import { useSegmentsStore } from "@/entities/segments";
+import { useSessionStore } from "@/entities/session";
 import { MinusIcon } from "@/shared/ui/icons";
 
 import type { SegmentsStore } from "@/entities/segments";
@@ -14,6 +15,7 @@ const SELECT_SEGMENTS_STATE = (s: SegmentsStore) => ({
 export const RemoveSegmentButton = () => {
 	const { isOnlySegment, selectedId } = useSegmentsStore(useShallow(SELECT_SEGMENTS_STATE));
 	const remove = useSegmentsStore((s) => s.actions.remove);
+	const updateSession = useSessionStore((s) => s.actions.updateSession);
 
 	const handleRemove = () => {
 		if (isOnlySegment) {
@@ -21,6 +23,7 @@ export const RemoveSegmentButton = () => {
 		}
 
 		remove(selectedId);
+		updateSession({ segments: useSegmentsStore.getState().state.segments });
 	};
 
 	useHotkeys([

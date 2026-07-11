@@ -5,6 +5,7 @@ import { useNavigate } from "react-router";
 import { toast } from "sonner";
 
 import { useSegmentsStore } from "@/entities/segments";
+import { useSessionStore } from "@/entities/session";
 import { useVideoStore } from "@/entities/video";
 
 import type { ExportSettings } from "./types";
@@ -51,9 +52,10 @@ const initialState: ProgressState = {
 };
 
 export const useExport = (settings: ExportSettings) => {
+	const [progress, setProgress] = useState(initialState);
 	const filePath = useVideoStore((s) => s.state.filePath);
 	const segments = useSegmentsStore((s) => s.state.segments);
-	const [progress, setProgress] = useState(initialState);
+	const blank = useSessionStore((s) => s.actions.blank);
 
 	const navigate = useNavigate();
 
@@ -99,6 +101,7 @@ export const useExport = (settings: ExportSettings) => {
 				const result = await invoke<ExportResult>("export_segments", { request });
 
 				if (result.success) {
+					blank();
 					navigate("/complete", { replace: true, state: { outputFiles: result.output_files } });
 				} else {
 					toast.error("Export failed");

@@ -1,6 +1,8 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { render } from "preact";
 
+import { useSessionStore } from "@/entities/session";
+
 import { App } from "./app";
 
 const initTheme = () => {
@@ -10,6 +12,7 @@ const initTheme = () => {
 const init = async () => {
 	try {
 		initTheme();
+		useSessionStore.getState().actions.init(window.__SESSION__);
 	} catch (error) {
 		console.error("Failed to initialize app: ", error);
 	}

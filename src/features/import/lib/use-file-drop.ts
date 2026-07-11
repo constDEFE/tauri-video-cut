@@ -2,13 +2,13 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect } from "preact/hooks";
 import { toast } from "sonner";
 
-export const useFileDrop = (loadCb: (path: string) => Promise<void>, formats: string[]) => {
+export const useFileDrop = (loadCb: (path: string) => Promise<void>, formats: string[], isLoading: boolean) => {
 	useEffect(() => {
 		const appWindow = getCurrentWindow();
 
 		const sub = async () => {
 			const unsub = await appWindow.onDragDropEvent((event) => {
-				if (event.payload.type !== "drop" || event.payload.paths?.length < 1) {
+				if (isLoading || event.payload.type !== "drop" || event.payload.paths?.length < 1) {
 					return;
 				}
 
@@ -31,5 +31,5 @@ export const useFileDrop = (loadCb: (path: string) => Promise<void>, formats: st
 		sub().then((fn) => (unsub = fn));
 
 		return () => void unsub?.();
-	}, [loadCb, formats]);
+	}, [loadCb, formats, isLoading]);
 };

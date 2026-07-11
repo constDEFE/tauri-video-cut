@@ -55,7 +55,7 @@ export const useSegmentsStore = create<SegmentsStore>((set, get) => ({
 			store.private._idToIdxMap.clear();
 			segments.forEach((s, idx) => store.private._idToIdxMap.set(s.id, idx));
 
-			set({ state: { ...store.state, segments, selectedId: segments[0]?.id ?? "" } });
+			set({ state: { ...store.state, segments, selectedId: segments.at(-1)?.id ?? "" } });
 		},
 		add: (segment) => {
 			const store = get();
