@@ -1,6 +1,6 @@
 use crate::core::process::ProcessManager;
 use crate::error::{AppError, Result};
-use crate::logger::{log_error, log_warn};
+use crate::logger::{log_error, log_info, log_warn};
 use crate::types::metadata::{AudioTrack, VideoMetadata};
 use serde::Deserialize;
 use std::fs::File;
@@ -451,15 +451,15 @@ fn extract_mp4_track_names(video_path: &str) -> Result<Vec<(Option<u32>, Option<
     for (idx, (track_id, name)) in track_data.iter().enumerate() {
         match (track_id, name) {
             (Some(id), Some(n)) => {
-                log_error(&format!("[MP4 Parser] Track {} ID={}: '{}'", idx, id, n))
+                log_info(&format!("[MP4 Parser] Track {} ID={}: '{}'", idx, id, n))
             }
             (Some(id), None) => {
-                log_error(&format!("[MP4 Parser] Track {} ID={}: <no name>", idx, id))
+                log_info(&format!("[MP4 Parser] Track {} ID={}: <no name>", idx, id))
             }
             (None, Some(n)) => {
-                log_error(&format!("[MP4 Parser] Track {} ID=<unknown>: '{}'", idx, n))
+                log_info(&format!("[MP4 Parser] Track {} ID=<unknown>: '{}'", idx, n))
             }
-            (None, None) => log_error(&format!(
+            (None, None) => log_info(&format!(
                 "[MP4 Parser] Track {} ID=<unknown>: <no name>",
                 idx
             )),
@@ -694,7 +694,7 @@ fn try_udta_name(
                         .trim_end_matches('\0')
                         .trim()
                         .to_string();
-                    log_error(&format!(
+                    log_info(&format!(
                         "[MP4 Parser] Extracted (udta->name): '{}'",
                         name_str
                     ));
@@ -800,7 +800,7 @@ fn try_udta_meta_ilst_nam(
                                                     .trim_end_matches('\0')
                                                     .trim()
                                                     .to_string();
-                                                log_error(&format!(
+                                                log_info(&format!(
                                                     "[MP4 Parser] Extracted (udta->meta->ilst->©nam->data): '{}'",
                                                     name_str
                                                 ));
@@ -869,7 +869,7 @@ fn try_udta_title(
                             .trim()
                             .to_string();
 
-                        log_error(&format!(
+                        log_info(&format!(
                             "[MP4 Parser] Extracted (udta->title): '{}'",
                             name_str
                         ));

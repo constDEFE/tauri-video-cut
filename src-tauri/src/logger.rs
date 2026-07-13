@@ -33,7 +33,10 @@ impl log::Log for FileLogger {
 }
 
 pub fn init() {
-    let log_dir = std::env::temp_dir().join("io.github.constdefe.tauri-video-cut").join("logs");
+    let log_dir = std::env::temp_dir()
+        .join("io.github.constdefe.tauri-video-cut")
+        .join("logs");
+
     if !log_dir.exists() {
         let _ = fs::create_dir_all(&log_dir);
     }
@@ -43,11 +46,7 @@ pub fn init() {
     let timestamp = chrono::Local::now().format("%Y-%m-%d");
     let log_path = log_dir.join(format!("{}.log", timestamp));
 
-    if let Ok(file) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-    {
+    if let Ok(file) = OpenOptions::new().create(true).append(true).open(&log_path) {
         *LOG_FILE.lock().unwrap() = Some(file);
         let _ = log::set_logger(&FileLogger).map(|()| log::set_max_level(log::LevelFilter::Trace));
         log_info("VideoCut started");

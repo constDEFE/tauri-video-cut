@@ -16,7 +16,11 @@ pub async fn export_segments(
     request: ExportRequest,
     process_manager: tauri::State<'_, ProcessManager>,
 ) -> Result<ExportResult> {
-    logger::log_info(&format!("Export started: {} segments from {}", request.segments.len(), request.video_path));
+    logger::log_info(&format!(
+        "Export started: {} segments from {}",
+        request.segments.len(),
+        request.video_path
+    ));
 
     if !Path::new(&request.video_path).exists() {
         logger::log_error(&format!("Video file not found: {}", request.video_path));
@@ -24,7 +28,11 @@ pub async fn export_segments(
     }
 
     if !Path::new(&request.output_folder).exists() {
-        logger::log_error(&format!("Output folder not found: {}", request.output_folder));
+        logger::log_error(&format!(
+            "Output folder not found: {}",
+            request.output_folder
+        ));
+
         return Err(AppError::ExportError(
             "Output folder does not exist".to_string(),
         ));
@@ -39,9 +47,11 @@ pub async fn export_segments(
 
     let ffmpeg_path = get_ffmpeg_path(&app_handle)?;
     let ffprobe_path = get_ffprobe_path(&app_handle)?;
-    let metadata = probe::probe_video(&ffprobe_path, &request.video_path, process_manager.inner()).await?;
+    let metadata =
+        probe::probe_video(&ffprobe_path, &request.video_path, process_manager.inner()).await?;
 
-    let keyframes = probe::get_keyframes(&ffprobe_path, &request.video_path, process_manager.inner()).await?;
+    let keyframes =
+        probe::get_keyframes(&ffprobe_path, &request.video_path, process_manager.inner()).await?;
 
     let total_segments = request.segments.len();
     let mut output_files = Vec::new();
@@ -89,31 +99,29 @@ pub async fn export_segments(
         let k1 = if start_is_keyframe {
             segment.start
         } else {
-            keyframes::find_prev_keyframe(segment.start, &keyframes)
-                .unwrap_or(segment.start)
+            keyframes::find_prev_keyframe(segment.start, &keyframes).unwrap_or(segment.start)
         };
 
         let k4 = if end_is_keyframe {
             segment.end
         } else {
-            keyframes::find_next_keyframe(segment.end, &keyframes)
-                .unwrap_or(segment.end)
+            keyframes::find_next_keyframe(segment.end, &keyframes).unwrap_or(segment.end)
         };
 
         let cut_mode = if request.smart_cut {
             if start_is_keyframe && end_is_keyframe {
                 executor::CutMode::StreamCopy
             } else {
-                let k2 = keyframes::find_next_keyframe(segment.start, &keyframes)
-                    .ok_or_else(|| {
+                let k2 =
+                    keyframes::find_next_keyframe(segment.start, &keyframes).ok_or_else(|| {
                         AppError::ExportError(format!(
                             "Cannot find keyframe after segment {} start",
                             idx + 1
                         ))
                     })?;
 
-                let k3 = keyframes::find_prev_keyframe(segment.end, &keyframes)
-                    .ok_or_else(|| {
+                let k3 =
+                    keyframes::find_prev_keyframe(segment.end, &keyframes).ok_or_else(|| {
                         AppError::ExportError(format!(
                             "Cannot find keyframe before segment {} end",
                             idx + 1
@@ -121,7 +129,10 @@ pub async fn export_segments(
                     })?;
 
                 executor::CutMode::SmartCut {
-                    k1, k2, k3, k4,
+                    k1,
+                    k2,
+                    k3,
+                    k4,
                     start_is_keyframe,
                     end_is_keyframe,
                 }
@@ -161,7 +172,8 @@ pub async fn export_segments(
                         if segment_times_len == 0 && progress > 1.0 {
                             ema_eta = segment_start.elapsed().as_secs_f64() * 100.0 / progress;
                         } else if progress > 1.0 {
-                            ema_eta = 0.9 * ema_eta + 0.1 * (segment_start.elapsed().as_secs_f64() * 100.0 / progress);
+                            ema_eta = 0.9 * ema_eta
+                                + 0.1 * (segment_start.elapsed().as_secs_f64() * 100.0 / progress);
                         }
                         let avg_time_per_segment = if segment_times_len > 0 {
                             segment_times_avg
@@ -174,8 +186,8 @@ pub async fn export_segments(
                         let current_segment_remaining =
                             (100.0 - progress).max(0.0) / 100.0 * avg_time_per_segment;
                         let remaining_segments = (total_segments - current_segment) as f64;
-                        let eta =
-                            current_segment_remaining.max(0.0) + (remaining_segments * avg_time_per_segment);
+                        let eta = current_segment_remaining.max(0.0)
+                            + (remaining_segments * avg_time_per_segment);
 
                         let _ = app_handle_clone.emit(
                             "export-progress",
@@ -188,9 +200,17 @@ pub async fn export_segments(
                         );
                     },
                     process_manager.as_ref(),
-                ).await?;
+                )
+                .await?;
             }
-            executor::CutMode::SmartCut { k1, k2, k3, k4, start_is_keyframe, end_is_keyframe } => {
+            executor::CutMode::SmartCut {
+                k1,
+                k2,
+                k3,
+                k4,
+                start_is_keyframe,
+                end_is_keyframe,
+            } => {
                 executor::execute_smart_cut(
                     &ffmpeg_path,
                     &request.video_path,
@@ -212,7 +232,8 @@ pub async fn export_segments(
                         if segment_times_len == 0 && progress > 1.0 {
                             ema_eta = segment_start.elapsed().as_secs_f64() * 100.0 / progress;
                         } else if progress > 1.0 {
-                            ema_eta = 0.9 * ema_eta + 0.1 * (segment_start.elapsed().as_secs_f64() * 100.0 / progress);
+                            ema_eta = 0.9 * ema_eta
+                                + 0.1 * (segment_start.elapsed().as_secs_f64() * 100.0 / progress);
                         }
                         let avg_time_per_segment = if segment_times_len > 0 {
                             segment_times_avg
@@ -225,8 +246,8 @@ pub async fn export_segments(
                         let current_segment_remaining =
                             (100.0 - progress).max(0.0) / 100.0 * avg_time_per_segment;
                         let remaining_segments = (total_segments - current_segment) as f64;
-                        let eta =
-                            current_segment_remaining.max(0.0) + (remaining_segments * avg_time_per_segment);
+                        let eta = current_segment_remaining.max(0.0)
+                            + (remaining_segments * avg_time_per_segment);
 
                         let _ = app_handle_clone.emit(
                             "export-progress",
@@ -238,13 +259,18 @@ pub async fn export_segments(
                             },
                         );
                     },
-                ).await?;
+                )
+                .await?;
             }
         }
 
         segment_times.push(segment_start.elapsed().as_secs_f64());
         output_files.push(output_path.to_string_lossy().to_string());
-        logger::log_info(&format!("Segment {}/{} exported successfully", idx + 1, total_segments));
+        logger::log_info(&format!(
+            "Segment {}/{} exported successfully",
+            idx + 1,
+            total_segments
+        ));
     }
 
     logger::log_info(&format!(
