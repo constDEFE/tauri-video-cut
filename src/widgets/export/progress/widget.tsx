@@ -1,5 +1,8 @@
+import { invoke } from "@tauri-apps/api/core";
+import { toast } from "sonner";
+
 import { useExport } from "@/features/export/execution";
-import { useRoute } from "@/shared/lib/router";
+import { useNavigate, useRoute } from "@/shared/lib/router";
 
 import { formatETA } from "./lib";
 
@@ -7,10 +10,25 @@ import type { ExportSettings } from "@/features/export/execution";
 
 export const ExportProgress = () => {
 	const route = useRoute();
-	const settings = (route.state as { settings: ExportSettings }).settings;
-	const progress = useExport(settings);
+	const navigate = useNavigate();
+	const progress = useExport(route.state?.settings as ExportSettings);
 
 	const isProbing = progress.currentSegment === 0 && progress.completionPercent === 0;
+
+	const handleCancel = async () => {
+		try {
+			await invoke("cancel_all_tasks");
+			navigate("/export");
+		} catch (error) {
+			let msg;
+
+			if (error instanceof Error) msg = error.message;
+			else if (typeof error === "string") msg = error;
+			else msg = "Unknown";
+
+			toast.error(`Failed to interrupt: ${msg}`);
+		}
+	};
 
 	return (
 		<>
@@ -39,6 +57,9 @@ export const ExportProgress = () => {
 			<p class="text-text mt-4 text-center text-sm select-none">
 				{isProbing ? "Extracting keyframes..." : "Exporting your segments..."}
 			</p>
+			<button class="button mx-auto mt-2 rounded-md px-6 py-2 font-medium" onClick={handleCancel}>
+				Cancel
+			</button>
 		</>
 	);
 };
