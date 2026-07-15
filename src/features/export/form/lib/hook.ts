@@ -1,9 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useNavigate } from "react-router";
 import { toast } from "sonner";
 
 import { useSegmentsStore } from "@/entities/segments";
 import { useVideoStore } from "@/entities/video";
+import { useNavigate } from "@/shared/lib/router";
 import { useTheme } from "@/shared/lib/theme";
 import { invariant } from "@/shared/utils";
 
@@ -42,7 +42,7 @@ export const useExportForm = () => {
 		window.dispatchEvent(new CustomEvent("configUpdate", { detail: newConfig }));
 
 		invoke("set_app_config", { config: newConfig });
-		navigate("/processing", { replace: true, state: { settings: parsedSettings } });
+		navigate("/processing", { state: { settings: parsedSettings } });
 	};
 
 	return handleSubmit;

@@ -1,9 +1,9 @@
 import { useHotkeys } from "@tanstack/react-hotkeys";
-import { useNavigate } from "react-router";
 import { useShallow } from "zustand/shallow";
 
 import { useVideoStore } from "@/entities/video";
 import { AddSegmentButton, RemoveSegmentButton, SplitSegmentButton } from "@/features/editor/segment-edit";
+import { useNavigate } from "@/shared/lib/router";
 import { SheetFooter } from "@/shared/ui";
 
 import type { VideoStore } from "@/entities/video";
@@ -18,7 +18,7 @@ export const Footer = () => {
 	const navigate = useNavigate();
 
 	const handleExport = () => {
-		navigate("/export", { replace: true });
+		navigate("/export");
 		resetPlayer();
 	};
 

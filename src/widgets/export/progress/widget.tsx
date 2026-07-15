@@ -1,14 +1,13 @@
 import { useExport } from "@/features/export/execution";
+import { useRoute } from "@/shared/lib/router";
 
 import { formatETA } from "./lib";
 
 import type { ExportSettings } from "@/features/export/execution";
 
-type Props = {
-	settings: ExportSettings;
-};
-
-export const ExportProgress = ({ settings }: Props) => {
+export const ExportProgress = () => {
+	const route = useRoute();
+	const settings = (route.state as { settings: ExportSettings }).settings;
 	const progress = useExport(settings);
 
 	const isProbing = progress.currentSegment === 0 && progress.completionPercent === 0;

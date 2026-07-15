@@ -1,22 +1,22 @@
 import { openPath } from "@tauri-apps/plugin-opener";
-import { useLocation, useNavigate } from "react-router";
 import { toast } from "sonner";
 
 import { useVideoStore } from "@/entities/video";
+import { useNavigate, useRoute } from "@/shared/lib/router";
 import { invariant } from "@/shared/utils";
 
 export const CompleteOutput = () => {
 	const resetVideo = useVideoStore((s) => s.actions.reset);
-	const location = useLocation();
+	const route = useRoute();
 	const navigate = useNavigate();
 
-	const outputFiles: [string] = location.state.outputFiles;
+	const outputFiles: [string] = route.state.outputFiles;
 
 	invariant(outputFiles);
 
 	const handleClearState = () => {
 		resetVideo();
-		navigate("/", { replace: true });
+		navigate("/");
 	};
 
 	const handleOpenFolder = async () => {

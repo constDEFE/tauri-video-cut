@@ -1,13 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import { nanoid } from "nanoid";
 import { useCallback, useState } from "preact/hooks";
-import { useNavigate } from "react-router";
 import { toast } from "sonner";
 
 import { useSegmentsStore } from "@/entities/segments";
 import { useSessionStore } from "@/entities/session";
 import { calculateEstimatedSize, useVideoStore, type VideoMetadata } from "@/entities/video";
 import { setAudioTrack } from "@/shared/lib/mpv";
+import { useNavigate } from "@/shared/lib/router";
 
 import type { Segment } from "@/entities/segments";
 import type { Session } from "@/entities/session";
@@ -87,7 +87,7 @@ export const useVideoLoader = () => {
 				setVideo(filePath, meta, audioTrackCb);
 				updateSession({ file_path: filePath, segments: segments, audio_tracks: audioTracks });
 
-				navigate("/editor", { replace: true });
+				navigate("/editor");
 			} catch (error) {
 				toast.error(`Failed to load video: ${error}`);
 				console.error(error);

@@ -1,12 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useState } from "preact/hooks";
-import { useNavigate } from "react-router";
 import { toast } from "sonner";
 
 import { useSegmentsStore } from "@/entities/segments";
 import { useSessionStore } from "@/entities/session";
 import { useVideoStore } from "@/entities/video";
+import { useNavigate } from "@/shared/lib/router";
 
 import type { ExportSettings } from "./types";
 import type { Event } from "@tauri-apps/api/event";
@@ -102,16 +102,16 @@ export const useExport = (settings: ExportSettings) => {
 
 				if (result.success) {
 					blank();
-					navigate("/complete", { replace: true, state: { outputFiles: result.output_files } });
+					navigate("/complete", { state: { outputFiles: result.output_files } });
 				} else {
 					toast.error("Export failed");
-					navigate("/export", { replace: true });
+					navigate("/export");
 				}
 			} catch (error) {
 				console.error("Export error:", error);
 				toast.error(`Export failed: ${error}`);
 
-				navigate("/export", { replace: true });
+				navigate("/export");
 			}
 		};
 

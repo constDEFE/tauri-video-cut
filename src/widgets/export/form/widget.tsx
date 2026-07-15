@@ -1,8 +1,7 @@
-import { useNavigate } from "react-router";
-
 import { useAppConfig } from "@/entities/config";
 import { useVideoStore } from "@/entities/video";
 import { useExportForm } from "@/features/export/form";
+import { useNavigate } from "@/shared/lib/router";
 import { getFileNameWithoutExtension } from "@/shared/utils";
 
 import { AudioTracks, OutputField, PrefixField, SmartCutField } from "./ui";
@@ -14,7 +13,7 @@ export const ExportForm = () => {
 	const submitHandler = useExportForm();
 
 	const handleBack = () => {
-		navigate("/editor", { replace: true });
+		navigate("/editor");
 	};
 
 	const defaultPrefix = getFileNameWithoutExtension(filePath);

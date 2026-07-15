@@ -1,14 +1,13 @@
 import "./styles/index.css";
 
 import { useHotkeys } from "@tanstack/react-hotkeys";
-import { RouterProvider } from "react-router";
 
 import { Toaster } from "@/shared/ui";
 import { exitFullscreen, toggleFullscreen } from "@/shared/utils";
 
+import { AppErrorBoundary } from "./error-boundary";
 import { usePreventContextMenu } from "./lib";
-import { AppErrorBoundary } from "./root-error-boundary";
-import { router } from "./routes";
+import { AppRouter } from "./router";
 
 export const App = () => {
 	usePreventContextMenu();
@@ -22,7 +21,7 @@ export const App = () => {
 	return (
 		<AppErrorBoundary>
 			<Toaster />
-			<RouterProvider router={router} />
+			<AppRouter />
 		</AppErrorBoundary>
 	);
 };
