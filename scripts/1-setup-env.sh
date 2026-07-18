@@ -1,59 +1,53 @@
 #!/bin/bash
 set -e
 
-echo "=== [1/5] Initializing MSYS2 MINGW64 Environment ==="
+echo "=== [1/5] Initializing MSYS2 UCRT64 Environment ==="
 
-if [ "$MSYSTEM" != "MINGW64" ]; then
-  echo "ERROR: This script must be run inside an MSYS2 MINGW64 terminal shell!"
+if [ "$MSYSTEM" != "UCRT64" ]; then
+  echo "ERROR: This script must be run inside an MSYS2 UCRT64 terminal shell!"
   exit 1
 fi
 
-echo "Updating pacman repositories..."
-pacman -Sy --noconfirm
+echo "Updating system and installing all build dependencies..."
 
-echo "Installing build tools (GCC, Make, Meson, Ninja)..."
-pacman -S --needed --noconfirm \
-  mingw-w64-x86_64-toolchain \
+pacman -Syu --needed --noconfirm \
+  mingw-w64-ucrt-x86_64-toolchain \
   git \
   make \
   nasm \
   yasm \
-  pkg-config \
-  mingw-w64-x86_64-meson \
-  mingw-w64-x86_64-ninja
-
-echo "Installing codec and player dependencies..."
-pacman -S --needed --noconfirm \
-  mingw-w64-x86_64-ffmpeg \
-  mingw-w64-x86_64-libass \
-  mingw-w64-x86_64-dav1d \
-  mingw-w64-x86_64-libdovi \
-  mingw-w64-x86_64-fontconfig \
-  mingw-w64-x86_64-freetype \
-  mingw-w64-x86_64-fribidi \
-  mingw-w64-x86_64-glib2 \
-  mingw-w64-x86_64-graphite2 \
-  mingw-w64-x86_64-harfbuzz \
-  mingw-w64-x86_64-libiconv \
-  mingw-w64-x86_64-libjpeg-turbo \
-  mingw-w64-x86_64-lcms2 \
-  mingw-w64-x86_64-libplacebo \
-  mingw-w64-x86_64-libpng \
-  mingw-w64-x86_64-shaderc \
-  mingw-w64-x86_64-spirv-cross \
-  mingw-w64-x86_64-gcc \
-  mingw-w64-x86_64-bzip2 \
-  mingw-w64-x86_64-brotli \
-  mingw-w64-x86_64-expat \
-  mingw-w64-x86_64-gettext \
-  mingw-w64-x86_64-pcre2 \
-  mingw-w64-x86_64-zimg \
-  mingw-w64-x86_64-svt-av1 \
-  mingw-w64-x86_64-libunibreak \
-  mingw-w64-x86_64-libva \
-  mingw-w64-x86_64-libvpx \
-  mingw-w64-x86_64-x264 \
-  mingw-w64-x86_64-x265 \
+  mingw-w64-ucrt-x86_64-pkgconf \
+  unzip \
+  curl \
+  mingw-w64-ucrt-x86_64-python \
+  mingw-w64-ucrt-x86_64-meson \
+  mingw-w64-ucrt-x86_64-ninja \
+  mingw-w64-ucrt-x86_64-ffmpeg \
+  mingw-w64-ucrt-x86_64-libass \
+  mingw-w64-ucrt-x86_64-dav1d \
+  mingw-w64-ucrt-x86_64-libdovi \
+  mingw-w64-ucrt-x86_64-fontconfig \
+  mingw-w64-ucrt-x86_64-freetype \
+  mingw-w64-ucrt-x86_64-fribidi \
+  mingw-w64-ucrt-x86_64-glib2 \
+  mingw-w64-ucrt-x86_64-graphite2 \
+  mingw-w64-ucrt-x86_64-harfbuzz \
+  mingw-w64-ucrt-x86_64-libplacebo \
+  mingw-w64-ucrt-x86_64-libpng \
+  mingw-w64-ucrt-x86_64-shaderc \
+  mingw-w64-ucrt-x86_64-spirv-cross \
+  mingw-w64-ucrt-x86_64-gcc \
+  mingw-w64-ucrt-x86_64-brotli \
+  mingw-w64-ucrt-x86_64-expat \
+  mingw-w64-ucrt-x86_64-gettext \
+  mingw-w64-ucrt-x86_64-pcre2 \
+  mingw-w64-ucrt-x86_64-zimg \
+  mingw-w64-ucrt-x86_64-svt-av1 \
+  mingw-w64-ucrt-x86_64-libunibreak \
+  mingw-w64-ucrt-x86_64-libva \
+  mingw-w64-ucrt-x86_64-libvpx \
+  mingw-w64-ucrt-x86_64-x264 \
+  mingw-w64-ucrt-x86_64-x265
 
 WORKSPACE_DIR=$(pwd)
 

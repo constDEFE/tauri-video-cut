@@ -1,1 +1,2 @@
-export * from "./hook";
+export * from "./use-app-config";
+export * from "./persist-theme";

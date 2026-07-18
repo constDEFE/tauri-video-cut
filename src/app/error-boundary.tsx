@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { Component } from "preact";
 
 import type { ComponentChildren } from "preact";
@@ -11,6 +12,11 @@ interface State {
 	hasError: boolean;
 	error: Error | null;
 }
+
+const handleReload = async () => {
+	await invoke("cancel_all_tasks");
+	window.location.reload();
+};
 
 export class AppErrorBoundary extends Component<Props, State> {
 	constructor(props: Props) {
@@ -50,7 +56,7 @@ export class AppErrorBoundary extends Component<Props, State> {
 							</pre>
 						</details>
 					)}
-					<button onClick={() => window.location.reload()} class="button rounded px-4 py-2 font-semibold">
+					<button onClick={handleReload} class="button rounded px-4 py-2 font-semibold">
 						Reload Application
 					</button>
 				</div>

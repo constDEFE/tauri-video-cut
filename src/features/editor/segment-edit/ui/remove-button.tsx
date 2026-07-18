@@ -9,16 +9,15 @@ import type { SegmentsStore } from "@/entities/segments";
 
 const SELECT_SEGMENTS_STATE = (s: SegmentsStore) => ({
 	isOnlySegment: s.state.segments.length === 1,
-	selectedId: s.state.selectedId
+	selectedId: s.state.selectedSegment?.id
 });
-
 export const RemoveSegmentButton = () => {
 	const { isOnlySegment, selectedId } = useSegmentsStore(useShallow(SELECT_SEGMENTS_STATE));
 	const remove = useSegmentsStore((s) => s.actions.remove);
 	const updateSession = useSessionStore((s) => s.actions.updateSession);
 
 	const handleRemove = () => {
-		if (isOnlySegment) {
+		if (isOnlySegment || !selectedId) {
 			return;
 		}
 

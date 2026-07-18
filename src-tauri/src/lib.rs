@@ -3,63 +3,28 @@ mod config;
 mod core;
 mod error;
 mod logger;
-mod models;
 mod session;
 mod types;
 mod utils;
 
-use commands::{export, metadata};
-use core::process::ProcessManager;
-use models::AppConfig;
-use session::{load_session, save_session};
+use core::ProcessManager;
+use core::waveform::{WaveformJobRegistry, cancel_waveform, stream_waveform};
+use session::load_session;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
-
-fn cleanup_orphaned_temp_segments() {
-    let temp_dir = std::env::temp_dir()
-        .join("io.github.constdefe.tauri-video-cut")
-        .join("temp_segments");
-
-    if !temp_dir.exists() {
-        return;
-    }
-
-    if let Ok(entries) = std::fs::read_dir(&temp_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if let Ok(metadata) = entry.metadata() {
-                if metadata.is_file() {
-                    let _ = std::fs::remove_file(&path);
-                }
-            }
-        }
-    }
-}
-
-fn add_lib_to_dll_search_path() {
-    use std::iter::once;
-    use std::os::windows::ffi::OsStrExt;
-
-    if let Ok(exe_path) = std::env::current_exe() {
-        if let Some(exe_dir) = exe_path.parent() {
-            let lib_dir = exe_dir.join("lib");
-            if lib_dir.exists() {
-                let wide: Vec<u16> = lib_dir.as_os_str().encode_wide().chain(once(0)).collect();
-                unsafe extern "system" {
-                    fn SetDllDirectoryW(lpPathName: *const u16) -> i32;
-                }
-                unsafe {
-                    SetDllDirectoryW(wide.as_ptr());
-                }
-            }
-        }
-    }
-}
+use utils::cleanup::{cleanup_old_waveforms, cleanup_orphaned_temp_segments};
+use utils::dll::add_lib_to_dll_search_path;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     logger::init();
+
+    log_info!("VideoCut backend initializing");
+
     add_lib_to_dll_search_path();
     cleanup_orphaned_temp_segments();
+    cleanup_old_waveforms();
+
+    log_info!("Startup cleanup completed");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_libmpv::init())
@@ -70,15 +35,20 @@ pub fn run() {
         .manage(
             ProcessManager::new().expect("Failed to create Windows Job Object. This application requires Windows Vista or later.")
         )
+        .manage(WaveformJobRegistry::new())
         .invoke_handler(tauri::generate_handler![
-            metadata::get_video_metadata,
-            export::export_segments,
-            set_app_config,
-            set_app_config_var,
+            commands::export::export_segments,
+            commands::metadata::get_video_metadata,
+            stream_waveform,
+            cancel_waveform,
+            commands::config::set_app_config,
+            commands::config::set_app_config_var,
             cancel_all_tasks,
-            set_session,
+            commands::session::set_session,
         ])
         .setup(|app| {
+        		log_debug!("Loading config and session for frontend injection");
+
             let config = config::load_config(app.app_handle()).unwrap_or_default();
             let config_json = serde_json::to_string(&config).unwrap_or_default();
 
@@ -105,32 +75,13 @@ pub fn run() {
 }
 
 #[tauri::command]
-async fn cancel_all_tasks(manager: tauri::State<'_, ProcessManager>) -> Result<(), String> {
+async fn cancel_all_tasks(
+    manager: tauri::State<'_, ProcessManager>,
+    registry: tauri::State<'_, WaveformJobRegistry>,
+) -> Result<(), String> {
+    log_warn!("User requested cancellation of all tasks");
+
+    registry.cancel_all();
     manager.kill_all();
     Ok(())
-}
-
-#[tauri::command]
-async fn set_app_config(app: tauri::AppHandle, config: AppConfig) -> Result<(), String> {
-    config::set_app_config(&app, &config)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn set_app_config_var(
-    app: tauri::AppHandle,
-    key: String,
-    value: serde_json::Value,
-) -> Result<(), String> {
-    config::set_app_config_var(&app, &key, value)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn set_session(app: tauri::AppHandle, session: session::Session) -> Result<(), String> {
-    save_session(&app, &session)
-        .await
-        .map_err(|e| e.to_string())
 }

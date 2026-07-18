@@ -1,6 +1,7 @@
 import { useShallow } from "zustand/shallow";
 
-import { useVideoStore } from "@/entities/video";
+import { useVideoStore, type VideoStore } from "@/entities/video";
+import { WaveformController } from "@/entities/waveform";
 import { setAudioTrack } from "@/shared/lib/mpv";
 import {
 	SelectContent,
@@ -12,14 +13,14 @@ import {
 	Select as UiSelect
 } from "@/shared/ui";
 
-import type { VideoStore } from "@/entities/video";
-
 const TypedSelect = UiSelect<number>;
 
 const SELECT_VIDEO = (s: VideoStore) => ({
 	tracks: s.state.metadata?.audio_tracks,
 	selected: s.state.player.selectedAudio,
-	getAudioById: s.actions.player.getAudioById
+	getAudioById: s.actions.player.getAudioById,
+	filePath: s.state.filePath,
+	duration: s.state.metadata?.duration
 });
 
 type Props = {
@@ -27,12 +28,19 @@ type Props = {
 };
 
 export const Select = ({ onSelect }: Props) => {
-	const { getAudioById, selected, tracks } = useVideoStore(useShallow(SELECT_VIDEO));
+	const { getAudioById, selected, tracks, filePath, duration } = useVideoStore(useShallow(SELECT_VIDEO));
 
 	const handleSelect = (value: number | null) => {
 		if (!value) return;
 		setAudioTrack(value);
 		onSelect();
+
+		if (filePath && duration) {
+			WaveformController.startWaveform(value, {
+				videoPath: filePath,
+				duration
+			});
+		}
 	};
 
 	return (

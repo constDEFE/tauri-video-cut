@@ -1,2 +1,5 @@
 pub mod ffmpeg;
-pub mod process;
+pub mod system;
+pub mod waveform;
+
+pub use system::ProcessManager;

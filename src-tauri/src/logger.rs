@@ -1,98 +1,59 @@
-use std::fs::{self, File, OpenOptions};
-use std::io::Write;
-use std::path::PathBuf;
-use std::sync::Mutex;
-
-static LOG_FILE: Mutex<Option<File>> = Mutex::new(None);
-
-struct FileLogger;
-
-impl log::Log for FileLogger {
-    fn enabled(&self, _metadata: &log::Metadata) -> bool {
-        true
-    }
-
-    fn log(&self, record: &log::Record) {
-        let level = match record.level() {
-            log::Level::Error => "ERROR",
-            log::Level::Warn => "WARN",
-            log::Level::Info => "INFO",
-            log::Level::Debug => "DEBUG",
-            log::Level::Trace => "TRACE",
-        };
-        write_log(level, record.args().to_string().as_str());
-    }
-
-    fn flush(&self) {
-        if let Ok(mut guard) = LOG_FILE.lock() {
-            if let Some(file) = guard.as_mut() {
-                let _ = file.flush();
-            }
-        }
-    }
+#[macro_export]
+macro_rules! log_info {
+    ($($arg:tt)*) => { tracing::info!($($arg)*) };
 }
+
+#[macro_export]
+macro_rules! log_warn {
+    ($($arg:tt)*) => { tracing::warn!($($arg)*) };
+}
+
+#[macro_export]
+macro_rules! log_error {
+    ($($arg:tt)*) => { tracing::error!($($arg)*) };
+}
+
+#[macro_export]
+macro_rules! log_debug {
+    ($($arg:tt)*) => { tracing::debug!($($arg)*) };
+}
+
+pub use log_debug;
+pub use log_error;
+pub use log_info;
+pub use log_warn;
 
 pub fn init() {
-    let log_dir = std::env::temp_dir()
-        .join("io.github.constdefe.tauri-video-cut")
-        .join("logs");
+    use tracing_appender::rolling::{RollingFileAppender, Rotation};
+    use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
-    if !log_dir.exists() {
-        let _ = fs::create_dir_all(&log_dir);
-    }
+    let log_dir = crate::utils::paths::app_temp_dir().join("logs");
+    std::fs::create_dir_all(&log_dir).ok();
 
-    rotate_logs(&log_dir);
+    let file_appender = RollingFileAppender::builder()
+        .rotation(Rotation::DAILY)
+        .filename_prefix("videocut")
+        .filename_suffix("log")
+        .max_log_files(10)
+        .build(&log_dir)
+        .expect("Failed to create log appender");
 
-    let timestamp = chrono::Local::now().format("%Y-%m-%d");
-    let log_path = log_dir.join(format!("{}.log", timestamp));
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+    std::mem::forget(_guard);
 
-    if let Ok(file) = OpenOptions::new().create(true).append(true).open(&log_path) {
-        *LOG_FILE.lock().unwrap() = Some(file);
-        let _ = log::set_logger(&FileLogger).map(|()| log::set_max_level(log::LevelFilter::Trace));
-        log_info("VideoCut started");
-    }
-}
+    tracing_subscriber::registry()
+        .with(
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new("info,tower_http=debug")),
+        )
+        .with(
+            fmt::layer()
+                .with_writer(non_blocking)
+                .with_ansi(false)
+                .json(),
+        )
+        .with(fmt::layer().with_writer(std::io::stderr).with_ansi(true))
+        .init();
 
-fn rotate_logs(log_dir: &PathBuf) {
-    if let Ok(entries) = fs::read_dir(log_dir) {
-        let mut log_files: Vec<_> = entries
-            .filter_map(|e| e.ok())
-            .filter(|e| {
-                e.path()
-                    .extension()
-                    .and_then(|s| s.to_str())
-                    .map(|s| s == "log")
-                    .unwrap_or(false)
-            })
-            .collect();
-
-        log_files.sort_by_key(|e| e.metadata().and_then(|m| m.modified()).ok());
-
-        if log_files.len() >= 10 {
-            for entry in log_files.iter().take(log_files.len() - 9) {
-                let _ = fs::remove_file(entry.path());
-            }
-        }
-    }
-}
-
-fn write_log(level: &str, message: &str) {
-    if let Ok(mut guard) = LOG_FILE.lock() {
-        if let Some(file) = guard.as_mut() {
-            let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
-            let _ = writeln!(file, "[{}] {} - {}", timestamp, level, message);
-        }
-    }
-}
-
-pub fn log_info(message: &str) {
-    write_log("INFO", message);
-}
-
-pub fn log_warn(message: &str) {
-    write_log("WARN", message);
-}
-
-pub fn log_error(message: &str) {
-    write_log("ERROR", message);
+    tracing::info!("VideoCut logging initialized (tracing backend)");
 }

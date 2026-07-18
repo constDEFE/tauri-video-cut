@@ -1,8 +1,13 @@
-export type AudioTrack = {
-	track_id: number;
-	index: number;
-	codec: string;
-	name: string;
+import type { AudioTrack } from "@/shared/types/common";
+
+export type AudioWaveform = {
+	left: Uint8Array;
+	right?: Uint8Array | undefined;
+};
+
+export type RawAudioWaveform = {
+	left: number[];
+	right?: number[];
 };
 
 export type VideoMetadata = {
@@ -13,4 +18,5 @@ export type VideoMetadata = {
 	bitrate: number;
 	fps: number;
 	audio_tracks: AudioTrack[];
+	waveforms?: RawAudioWaveform[];
 };

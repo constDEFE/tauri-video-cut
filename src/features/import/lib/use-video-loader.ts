@@ -6,7 +6,8 @@ import { toast } from "sonner";
 import { useSegmentsStore } from "@/entities/segments";
 import { useSessionStore } from "@/entities/session";
 import { calculateEstimatedSize, useVideoStore, type VideoMetadata } from "@/entities/video";
-import { setAudioTrack } from "@/shared/lib/mpv";
+import { WaveformController } from "@/entities/waveform";
+import { resetAudioTrack, setAudioTrack } from "@/shared/lib/mpv";
 import { useNavigate } from "@/shared/lib/router";
 
 import type { Segment } from "@/entities/segments";
@@ -64,10 +65,10 @@ const getVideoMeta = async (filePath: string) => {
 
 export const useVideoLoader = () => {
 	const [isLoading, setIsLoading] = useState(false);
+	const session = useSessionStore((s) => s.state.session);
 	const setVideo = useVideoStore((s) => s.actions.setVideo);
 	const setSegments = useSegmentsStore((s) => s.actions.set);
 	const updateSession = useSessionStore((s) => s.actions.updateSession);
-	const session = useSessionStore((s) => s.state.session);
 	const navigate = useNavigate();
 
 	const loadVideo = useCallback(
@@ -83,9 +84,17 @@ export const useVideoLoader = () => {
 					setAudioTrack(audioTracks[0]!);
 				};
 
+				resetAudioTrack();
 				setSegments(segments);
 				setVideo(filePath, meta, audioTrackCb);
 				updateSession({ file_path: filePath, segments: segments, audio_tracks: audioTracks });
+
+				if (meta.audio_tracks.length > 0 && audioTracks[0]) {
+					WaveformController.startWaveform(audioTracks[0], {
+						videoPath: filePath,
+						duration: meta.duration
+					});
+				}
 
 				navigate("/editor");
 			} catch (error) {
@@ -96,7 +105,7 @@ export const useVideoLoader = () => {
 			}
 		},
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-		[]
+		[session]
 	);
 
 	return {

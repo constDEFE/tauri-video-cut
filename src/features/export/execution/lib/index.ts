@@ -1,2 +1,2 @@
-export * from "./hook";
+export * from "./use-export";
 export * from "./types";

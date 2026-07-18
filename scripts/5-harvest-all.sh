@@ -3,18 +3,25 @@ set -e
 
 echo "=== [5/5] Harvesting Binaries and System Runtime DLL Dependencies ==="
 
+if [ "$MSYSTEM" != "UCRT64" ]; then
+  echo "ERROR: This script must be run inside an MSYS2 UCRT64 terminal shell"
+  exit 1
+fi
+
 WORKSPACE_DIR=$(pwd)
 STAGE_FF_DIR="$WORKSPACE_DIR/ffmpeg-dist/bin"
 STAGE_MPV_DIR="$WORKSPACE_DIR/mpv-dist/bin"
 STAGE_MPV_WRAPPER_DIR="$WORKSPACE_DIR/mpv-wrapper"
 OUTPUT_DIR="$WORKSPACE_DIR/../src-tauri/lib"
 
+UCRT_BIN_DIR="${MINGW_PREFIX:-/ucrt64}/bin"
+
 rm -rf "$OUTPUT_DIR"
 mkdir -p "$OUTPUT_DIR"
 mkdir -p "$STAGE_MPV_WRAPPER_DIR"
 
 if [ ! -f "$STAGE_FF_DIR/ffmpeg.exe" ] || [ ! -f "$STAGE_MPV_DIR/libmpv-2.dll" ]; then
-  echo "ERROR: Core processing binaries were not found. Run script 2 first."
+  echo "ERROR: Core processing binaries were not found. Run scripts 3 and 4 first."
   exit 1
 fi
 
@@ -41,11 +48,17 @@ if [ $CURL_STATUS -ne 0 ]; then
   echo "1. Open this URL in your web browser:"
   echo "   ${WRAPPER_URL}"
   echo "2. Open the downloaded .zip file."
-  echo "3. Extract or copy 'libmpv-wrapper.dll' directly into this directory:"
+  echo "3. Extract or copy 'libmpv-wrapper.dll' into one of these directories:"
   echo "   ${STAGE_MPV_WRAPPER_DIR}"
+  echo "   ${OUTPUT_DIR}"
   echo "========================================================================="
   echo ""
-  read -p "Press [ENTER] once you have manually placed 'libmpv-wrapper.dll' in the folder to verify..."
+
+  if [ -t 0 ]; then
+    read -p "Press [ENTER] once you have manually placed 'libmpv-wrapper.dll' to verify..."
+  else
+    echo "Non-interactive shell detected. Continuing to verification..."
+  fi
 else
   echo "Extracting wrapper bridge..."
   set +e
@@ -53,25 +66,32 @@ else
   UNZIP_STATUS=$?
   set -e
   rm -f "$STAGE_MPV_WRAPPER_DIR/libmpv-wrapper.zip"
-  
+
   if [ $UNZIP_STATUS -ne 0 ]; then
     echo "========================================================================="
     echo "  WARNING: Extraction of the wrapper archive failed"
     echo "========================================================================="
     echo "Extract 'libmpv-wrapper.dll' manually from your downloads and"
-    echo "place it directly inside: ${OUTPUT_DIR}"
+    echo "place it inside one of these directories:"
+    echo "  ${STAGE_MPV_WRAPPER_DIR}"
+    echo "  ${OUTPUT_DIR}"
     echo "========================================================================="
-    read -p "Press [ENTER] once you have manually placed 'libmpv-wrapper.dll' to verify..."
-  fi
 
-  cp "$STAGE_MPV_WRAPPER_DIR/bin/libmpv-wrapper.dll" "$OUTPUT_DIR"
+    if [ -t 0 ]; then
+      read -p "Press [ENTER] once you have manually placed 'libmpv-wrapper.dll'..."
+    else
+      echo "Non-interactive shell detected. Continuing to verification..."
+    fi
+  fi
 fi
+
+find "$STAGE_MPV_WRAPPER_DIR" -type f -name "libmpv-wrapper.dll" -exec cp -f {} "$OUTPUT_DIR/" \;
 
 if [ ! -f "$OUTPUT_DIR/libmpv-wrapper.dll" ]; then
   echo "ERROR: 'libmpv-wrapper.dll' could not be found or verified in the target directory"
   echo "Aborting script execution."
   exit 1
-fi	
+fi
 echo "Successfully verified libmpv-wrapper link layer."
 
 REQUIRED_DLLS=(
@@ -82,7 +102,6 @@ REQUIRED_DLLS=(
   "libass"
   "libbrotlicommon"
   "libbrotlidec"
-  "libbz2"
   "libdav1d"
   "libdovi"
   "libexpat"
@@ -93,10 +112,7 @@ REQUIRED_DLLS=(
   "libglib"
   "libgraphite2"
   "libharfbuzz-0"
-  "libiconv"
   "libintl"
-  "libjpeg"
-  "liblcms2"
   "libpcre2-8"
   "libplacebo"
   "libpng"
@@ -105,8 +121,6 @@ REQUIRED_DLLS=(
   "libstdc++"
   "libSvtAv1Enc"
   "libunibreak"
-  "libva"
-  "libva_win32"
   "libvpx"
   "libwinpthread"
   "libx264"
@@ -117,47 +131,51 @@ REQUIRED_DLLS=(
   "zlib"
 )
 
-echo "Locating and gathering environment runtime dependencies..."
-for dll_base in "${REQUIRED_DLLS[@]}"; do
-  copied=0
-  
+copy_dll_matches() {
+  local dir="$1"
+  local pattern="$2"
+  local label="$3"
+  local copied=0
+  local match
+
+  if [ ! -d "$dir" ]; then
+    return 1
+  fi
+
   while IFS= read -r -d '' match; do
-    echo "Found dependency: $(basename "$match")"
-    cp "$match" "$OUTPUT_DIR/"
+    echo "Found dependency (${label}): $(basename "$match")"
+    cp -f "$match" "$OUTPUT_DIR/"
     copied=1
-  done < <(find "$STAGE_FF_DIR" -maxdepth 1 -type f -name "${dll_base}*.dll" -print0 2>/dev/null)
-  
-  if [ "$copied" -eq 0 ]; then
-    while IFS= read -r -d '' match; do
-      echo "Found dependency: $(basename "$match")"
-      cp "$match" "$OUTPUT_DIR/"
-      copied=1
-    done < <(find /mingw64/bin -maxdepth 1 -type f -name "${dll_base}*.dll" -print0 2>/dev/null)
+  done < <(find "$dir" -maxdepth 1 -type f -name "$pattern" -print0 2>/dev/null)
+
+  [ "$copied" -eq 1 ]
+}
+
+echo "Locating and gathering UCRT64 runtime dependencies..."
+
+for dll_base in "${REQUIRED_DLLS[@]}"; do
+  if copy_dll_matches "$STAGE_FF_DIR" "${dll_base}*.dll" "ffmpeg-dist exact"; then
+    continue
   fi
 
-  if [ "$copied" -eq 0 ]; then
-    while IFS= read -r -d '' match; do
-      echo "Found dependency (alt match): $(basename "$match")"
-      cp "$match" "$OUTPUT_DIR/"
-      copied=1
-    done < <(find /mingw64/bin -maxdepth 1 -type f -iname "*${dll_base}*.dll" -print0 2>/dev/null)
-    
-    if [ "$copied" -eq 0 ]; then
-      while IFS= read -r -d '' match; do
-        echo "Found dependency (alt match): $(basename "$match")"
-        cp "$match" "$OUTPUT_DIR/"
-        copied=1
-      done < <(find "$STAGE_FF_DIR" -maxdepth 1 -type f -iname "*${dll_base}*.dll" -print0 2>/dev/null)
-    fi
-
-    if [ "$copied" -eq 0 ]; then
-      echo "WARNING: Could not resolve dependency mapping target for element: ${dll_base}"
-    fi
+  if copy_dll_matches "$UCRT_BIN_DIR" "${dll_base}*.dll" "ucrt64 exact"; then
+    continue
   fi
+
+  if copy_dll_matches "$UCRT_BIN_DIR" "*${dll_base}*.dll" "ucrt64 alt"; then
+    continue
+  fi
+
+  if copy_dll_matches "$STAGE_FF_DIR" "*${dll_base}*.dll" "ffmpeg-dist alt"; then
+    continue
+  fi
+
+  echo "WARNING: Could not resolve dependency mapping target for element: ${dll_base}"
 done
 
 echo "--------------------------------------------------------"
 echo "SUCCESS: Everything is gathered and ready for deployment."
 echo "Your shipping directory is located at: $OUTPUT_DIR"
 echo "--------------------------------------------------------"
+
 ls -la "$OUTPUT_DIR"

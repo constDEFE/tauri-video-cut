@@ -1,2 +1,1 @@
-export * from "./preview";
-export * from "./sidebar";
+export * from "./editor";

@@ -23,9 +23,6 @@ pub enum AppError {
     #[error("Invalid segment: {0}")]
     InvalidSegment(String),
 
-    #[error("Configuration error: {0}")]
-    ConfigError(String),
-
     #[error("Export failed: {0}")]
     ExportError(String),
 

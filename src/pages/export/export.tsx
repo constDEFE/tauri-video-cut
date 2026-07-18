@@ -1,4 +1,4 @@
-import { ExportForm } from "@/widgets/export/form";
+import { ExportForm } from "@/features/export/form";
 
 export const ExportPage = () => (
 	<div class="bg-accent-inverted grid min-h-screen place-items-center p-8">

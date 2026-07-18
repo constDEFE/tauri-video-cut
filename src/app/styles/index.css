@@ -166,3 +166,18 @@ input[type="checkbox"] {
 		@apply grid place-items-center;
 	}
 }
+
+.timeline-text {
+	@apply pointer-events-none absolute top-1/2 left-1/2 z-10 -translate-x-1/2 -translate-y-[calc(50%+0.25rem)] font-mono text-sm select-none;
+	font-weight: bold;
+	color: white;
+	text-shadow:
+		-1.5px -1.5px 0 #000,
+		1.5px -1.5px 0 #000,
+		-1.5px 1.5px 0 #000,
+		1.5px 1.5px 0 #000,
+		/* Sides */ -1.5px 0px 0 #000,
+		1.5px 0px 0 #000,
+		0px -1.5px 0 #000,
+		0px 1.5px 0 #000;
+}

@@ -11,6 +11,12 @@ pub struct AudioTrack {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AudioWaveform {
+    pub left: Vec<u16>,
+    pub right: Vec<u16>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VideoMetadata {
     pub duration: f64,
     pub width: u32,
@@ -19,4 +25,6 @@ pub struct VideoMetadata {
     pub bitrate: u64,
     pub fps: f64,
     pub audio_tracks: Vec<AudioTrack>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waveforms: Option<Vec<AudioWaveform>>,
 }

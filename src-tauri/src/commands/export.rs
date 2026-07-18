@@ -1,7 +1,7 @@
-use crate::core::ffmpeg::{executor, keyframes, probe};
-use crate::core::process::ProcessManager;
+use crate::core::ProcessManager;
+use crate::core::ffmpeg::{executor, keyframes, probe, smart_cut};
 use crate::error::{AppError, Result};
-use crate::logger;
+use crate::logger::{log_debug, log_info, log_warn};
 use crate::session::blank_session;
 use crate::types::export::{ExportProgress, ExportRequest, ExportResult};
 use crate::utils::paths::{get_ffmpeg_path, get_ffprobe_path};
@@ -9,37 +9,28 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 use tauri::{AppHandle, Emitter};
+use tracing::instrument;
 
+#[instrument(skip(app_handle, process_manager), fields(segments = request.segments.len(), video = %request.video_path, smart_cut = request.smart_cut), err(Debug))]
 #[tauri::command]
 pub async fn export_segments(
     app_handle: AppHandle,
     request: ExportRequest,
     process_manager: tauri::State<'_, ProcessManager>,
 ) -> Result<ExportResult> {
-    logger::log_info(&format!(
-        "Export started: {} segments from {}",
-        request.segments.len(),
-        request.video_path
-    ));
+    log_info!("Export started");
 
     if !Path::new(&request.video_path).exists() {
-        logger::log_error(&format!("Video file not found: {}", request.video_path));
         return Err(AppError::FileNotFound(request.video_path.clone()));
     }
 
     if !Path::new(&request.output_folder).exists() {
-        logger::log_error(&format!(
-            "Output folder not found: {}",
-            request.output_folder
-        ));
-
         return Err(AppError::ExportError(
             "Output folder does not exist".to_string(),
         ));
     }
 
     if request.segments.is_empty() {
-        logger::log_warn("No segments provided for export");
         return Err(AppError::InvalidSegment(
             "No segments to export".to_string(),
         ));
@@ -47,8 +38,14 @@ pub async fn export_segments(
 
     let ffmpeg_path = get_ffmpeg_path(&app_handle)?;
     let ffprobe_path = get_ffprobe_path(&app_handle)?;
-    let metadata =
-        probe::probe_video(&ffprobe_path, &request.video_path, process_manager.inner()).await?;
+
+    let metadata = probe::probe_video(
+        &ffprobe_path,
+        &ffmpeg_path,
+        &request.video_path,
+        process_manager.inner(),
+    )
+    .await?;
 
     let keyframes =
         probe::get_keyframes(&ffprobe_path, &request.video_path, process_manager.inner()).await?;
@@ -141,6 +138,8 @@ pub async fn export_segments(
             executor::CutMode::StreamCopy
         };
 
+        log_info!(segment = idx + 1, total = total_segments, start = segment.start, end = segment.end, cut_mode = ?cut_mode, "Processing segment");
+
         let app_handle_clone = app_handle.clone();
         let current_segment = idx + 1;
         let segment_times_len = segment_times.len();
@@ -154,6 +153,8 @@ pub async fn export_segments(
 
         match cut_mode {
             executor::CutMode::StreamCopy => {
+                log_debug!(segment = idx + 1, "Using stream copy mode");
+
                 let args = executor::build_export_args(
                     &request.video_path,
                     output_path.to_str().unwrap(),
@@ -211,7 +212,9 @@ pub async fn export_segments(
                 start_is_keyframe,
                 end_is_keyframe,
             } => {
-                executor::execute_smart_cut(
+                log_debug!(segment = idx + 1, k1, k2, k3, k4, "Using smart cut mode");
+
+                smart_cut::execute_smart_cut(
                     &ffmpeg_path,
                     &request.video_path,
                     output_path.to_str().unwrap(),
@@ -266,20 +269,14 @@ pub async fn export_segments(
 
         segment_times.push(segment_start.elapsed().as_secs_f64());
         output_files.push(output_path.to_string_lossy().to_string());
-        logger::log_info(&format!(
-            "Segment {}/{} exported successfully",
-            idx + 1,
-            total_segments
-        ));
+
+        log_info!(files = output_files.len(), "Export completed");
     }
 
-    logger::log_info(&format!(
-        "Export completed: {} files generated",
-        output_files.len()
-    ));
+    log_info!("Export completed: {} files generated", output_files.len());
 
     if let Err(e) = blank_session(&app_handle).await {
-        logger::log_error(&format!("Failed to blank session after export: {}", e));
+        log_warn!(error = %e, "Failed to blank session after export");
     }
 
     Ok(ExportResult {

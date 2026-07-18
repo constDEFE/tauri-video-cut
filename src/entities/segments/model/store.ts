@@ -5,12 +5,8 @@ import type { Segment } from "./types";
 
 type State = {
 	segments: Segment[];
-	selectedId: string;
+	selectedSegment: Segment | null;
 	maxSegments: number;
-};
-
-type Private = {
-	_idToIdxMap: Map<Segment["id"], number>;
 };
 
 type Actions = {
@@ -25,37 +21,40 @@ type Actions = {
 
 export type SegmentsStore = {
 	state: State;
-	private: Private;
 	actions: Actions;
 };
 
 export const useSegmentsStore = create<SegmentsStore>((set, get) => ({
 	state: {
 		segments: [],
-		selectedId: "",
+		selectedSegment: null,
 		maxSegments: 999
-	},
-	private: {
-		_idToIdxMap: new Map()
 	},
 	actions: {
 		getById: (id) => {
 			const store = get();
-			const idx = store.private._idToIdxMap.get(id);
+			const idx = store.state.segments.findIndex((s) => s.id === id);
 
-			if (typeof idx === "undefined" || !store.state.segments[idx]) {
-				throw "Corrupted { _idToIdxMap }";
+			if (idx === -1) {
+				throw new Error(`Segment not found: ${id}`);
 			}
 
-			return store.state.segments[idx];
+			return store.state.segments[idx] as Segment;
 		},
 		set: (segments) => {
-			const store = get();
+			if (segments.length < 1) {
+				throw new Error("Cannot set zero segments");
+			}
 
-			store.private._idToIdxMap.clear();
-			segments.forEach((s, idx) => store.private._idToIdxMap.set(s.id, idx));
+			const selectedSegment = segments.at(-1)!;
 
-			set({ state: { ...store.state, segments, selectedId: segments.at(-1)?.id ?? "" } });
+			set((s) => ({
+				state: {
+					...s.state,
+					segments,
+					selectedSegment
+				}
+			}));
 		},
 		add: (segment) => {
 			const store = get();
@@ -65,11 +64,13 @@ export const useSegmentsStore = create<SegmentsStore>((set, get) => ({
 				return;
 			}
 
-			const segments = [...store.state.segments, segment];
-
-			store.private._idToIdxMap.set(segment.id, segments.length - 1);
-
-			set({ state: { ...store.state, segments, selectedId: segment.id } });
+			set({
+				state: {
+					...store.state,
+					segments: [...store.state.segments, segment],
+					selectedSegment: segment
+				}
+			});
 		},
 		remove: (id) => {
 			const store = get();
@@ -79,43 +80,48 @@ export const useSegmentsStore = create<SegmentsStore>((set, get) => ({
 				return;
 			}
 
-			store.private._idToIdxMap.clear();
+			const segments = store.state.segments.filter((s) => s.id !== id);
+			const selectedSegment = id === store.state.selectedSegment?.id ? segments.at(-1)! : store.state.selectedSegment;
 
-			let idx = 0;
-			const segments = store.state.segments.reduce<Segment[]>(
-				(acc, s) => {
-					if (s.id === id) {
-						return acc;
-					}
-
-					store.private._idToIdxMap.set(s.id, idx);
-					acc[idx] = s;
-					idx++;
-
-					return acc;
-				},
-				Array.from({ length: store.state.segments.length - 1 })
-			);
-
-			const selectedId = store.state.selectedId === id ? (segments.at(-1)?.id ?? "") : store.state.selectedId;
-
-			set({ state: { ...store.state, segments, selectedId } });
+			set({
+				state: {
+					...store.state,
+					segments,
+					selectedSegment
+				}
+			});
 		},
 		update: (id, values) => {
 			const store = get();
-			const idx = store.private._idToIdxMap.get(id);
+			const idx = store.state.segments.findIndex((s) => s.id === id);
 
-			if (typeof idx === "undefined") {
-				throw "Corrupted { _idToIdxMap }";
+			if (idx === -1) {
+				throw new Error(`Segment not found: ${id}`);
 			}
 
-			const updated = { ...store.state.segments[idx], ...values } as Segment;
+			const current = store.state.segments[idx] as Segment;
+			const updated = { ...current, ...values } as Segment;
 			const segments = store.state.segments.with(idx, updated);
+			const selectedSegment = store.state.selectedSegment?.id === id ? updated : store.state.selectedSegment;
 
-			set({ state: { ...store.state, segments } });
+			set({
+				state: {
+					...store.state,
+					segments,
+					selectedSegment
+				}
+			});
 		},
 		select: (id) => {
-			set((s) => ({ state: { ...s.state, selectedId: id } }));
+			const store = get();
+			const selectedSegment = store.state.segments.find((s) => s.id === id) ?? null;
+
+			set((s) => ({
+				state: {
+					...s.state,
+					selectedSegment
+				}
+			}));
 		},
 		split: (id, splitTime) => {
 			const store = get();
@@ -142,32 +148,27 @@ export const useSegmentsStore = create<SegmentsStore>((set, get) => ({
 				estimatedSize: segment.estimatedSize * ((segment.end - splitTime) / segment.duration)
 			};
 
-			store.private._idToIdxMap.clear();
+			const segments = Array.from<Segment>({ length: store.state.segments.length + 1 });
 
-			let idx = 0;
-			const segments = store.state.segments.reduce<Segment[]>(
-				(acc, s) => {
-					if (s.id === id) {
-						store.private._idToIdxMap.set(segment1.id, idx);
-						store.private._idToIdxMap.set(segment2.id, idx + 1);
-						acc[idx] = segment1;
-						acc[idx + 1] = segment2;
+			let writeIdx = 0;
+			for (let i = 0; i < store.state.segments.length; i++) {
+				const s = store.state.segments[i]!;
 
-						idx += 2;
+				if (s.id === id) {
+					segments[writeIdx++] = segment1;
+					segments[writeIdx++] = segment2;
+				} else {
+					segments[writeIdx++] = s;
+				}
+			}
 
-						return acc;
-					}
-
-					store.private._idToIdxMap.set(s.id, idx);
-					acc[idx] = s;
-					idx++;
-
-					return acc;
-				},
-				Array.from({ length: store.state.segments.length + 1 })
-			);
-
-			set({ state: { ...store.state, segments, selectedId: segment1.id } });
+			set({
+				state: {
+					...store.state,
+					segments,
+					selectedSegment: segment1
+				}
+			});
 		}
 	}
 }));

@@ -14,6 +14,10 @@ type Props = {
 	isDisabled?: boolean;
 };
 
+const getIconComponent = (isMuted: boolean, volume: number) => {
+	return isMuted ? VolumeMutedIcon : volume > 50 ? VolumeFullIcon : volume > 0 ? VolumeLowIcon : VolumeNoneIcon;
+};
+
 const SELECT_VIDEO = (s: VideoStore) => ({
 	volume: s.state.player.volume,
 	isMuted: s.state.player.isMuted
@@ -43,6 +47,8 @@ export const VolumeSlider = memo(({ isDisabled }: Props) => {
 		{ enabled: !isDisabled }
 	);
 
+	const IconComponent = getIconComponent(isMuted, volume);
+
 	return (
 		<div class="group flex flex-col-reverse items-center">
 			<button
@@ -51,15 +57,7 @@ export const VolumeSlider = memo(({ isDisabled }: Props) => {
 				class="button secondary icon size-9 rounded-lg"
 				title={isMuted ? "Unmute (M)" : "Mute (M)"}
 			>
-				{isMuted ? (
-					<VolumeMutedIcon class="size-6" />
-				) : volume > 50 ? (
-					<VolumeFullIcon class="size-6" />
-				) : volume > 0 ? (
-					<VolumeLowIcon class="size-6" />
-				) : (
-					<VolumeNoneIcon class="size-6" />
-				)}
+				<IconComponent class="size-6" />
 			</button>
 			<div class="flex w-full justify-center pb-2 opacity-0 duration-100 ease-out group-hover:opacity-100">
 				<Slider

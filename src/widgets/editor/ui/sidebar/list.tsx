@@ -8,7 +8,7 @@ import type { SegmentsStore } from "@/entities/segments";
 
 const SELECT_SEGMENTS = (s: SegmentsStore) => ({
 	segments: s.state.segments,
-	selectedId: s.state.selectedId
+	selectedId: s.state.selectedSegment?.id
 });
 
 export const List = () => {

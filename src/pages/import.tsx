@@ -1,3 +1,3 @@
 import { ImportArea } from "@/features/import";
 
-export const ImportPage = () => ImportArea;
+export const ImportPage = ImportArea;

@@ -8,6 +8,7 @@ const FLUSH_INTERVAL_MS = 10_000;
 type State = {
 	session: Session;
 	isDirty: boolean;
+	isFlushing: boolean;
 	saveTimer: ReturnType<typeof setTimeout> | null;
 };
 
@@ -31,6 +32,7 @@ export type SessionStore = {
 const INITIAL_STATE: State = {
 	session: { file_path: null, segments: null, audio_tracks: null },
 	isDirty: false,
+	isFlushing: false,
 	saveTimer: null
 };
 
@@ -38,40 +40,39 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 	state: INITIAL_STATE,
 	private: {
 		markDirty: () => {
-			const store = get();
+			const { isDirty, saveTimer } = get().state;
 
-			if (store.state.isDirty || store.state.saveTimer !== null) {
+			if (isDirty || saveTimer !== null) {
 				return;
 			}
 
-			const timer = setTimeout(() => {
-				get().private.flushToDisk();
-			}, FLUSH_INTERVAL_MS);
+			const timer = setTimeout(() => get().private.flushToDisk(), FLUSH_INTERVAL_MS);
 
-			set({ state: { ...store.state, isDirty: true, saveTimer: timer } });
+			set((s) => ({ state: { ...s.state, isDirty: true, saveTimer: timer } }));
 		},
 		flushToDisk: async () => {
 			const store = get();
-			const timer = store.state.saveTimer;
 
-			if (timer !== null) {
-				clearTimeout(timer);
+			if (store.state.saveTimer !== null) {
+				clearTimeout(store.state.saveTimer);
 			}
 
-			if (!store.state.isDirty) {
+			if (!store.state.isDirty || store.state.isFlushing) {
 				return;
 			}
 
-			set({ state: { ...store.state, isDirty: false, saveTimer: null } });
+			set((s) => ({ state: { ...s.state, isFlushing: true, saveTimer: null } }));
 
 			try {
-				const mappedSegments =
-					store.state.session.segments?.map((s) => ({ end: s.end, start: s.start, id: s.id })) ?? null;
+				const snapshot = get().state.session;
+				const mappedSegments = snapshot.segments?.map(({ id, start, end }) => ({ id, start, end })) ?? null;
 
-				await invoke("set_session", { session: { ...store.state.session, segments: mappedSegments } });
+				await invoke("set_session", { session: { ...snapshot, segments: mappedSegments } });
+
+				set((s) => ({ state: { ...s.state, isDirty: false, isFlushing: false } }));
 			} catch (err) {
 				console.error("Failed to flush session:", err);
-				set({ state: { ...store.state, isDirty: true } });
+				set((s) => ({ state: { ...s.state, isDirty: true, isFlushing: false } }));
 			}
 		}
 	},

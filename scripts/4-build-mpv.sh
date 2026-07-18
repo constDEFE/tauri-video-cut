@@ -3,8 +3,8 @@ set -e
 
 echo "=== [4/5] Compiling Custom FFmpeg & mpv Player ==="
 
-if [ "$MSYSTEM" != "MINGW64" ]; then
-  echo "ERROR: This script must be run inside an MSYS2 MINGW64 terminal shell"
+if [ "$MSYSTEM" != "UCRT64" ]; then
+  echo "ERROR: This script must be run inside an MSYS2 UCRT64 terminal shell"
   exit 1
 fi
 
@@ -17,66 +17,83 @@ MPV_BUILD_DIR="$WORKSPACE_DIR/mpv-dist"
 echo "Wiping old build artifacts..."
 rm -rf "$MPV_TEMP_DIR"
 
-# Force pkg-config to read our lean custom build configuration manifests first
-export PKG_CONFIG_PATH="$FFMPEG_BUILD_DIR/lib/pkgconfig:$PKG_CONFIG_PATH"
+export PKG_CONFIG_PATH="$FFMPEG_BUILD_DIR/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
 
 cd "$MPV_REPO_DIR"
 
-# ======Settings Guide======
-# Dlibmpv - emit libmpv.dll
-# Ddefault_library - emit binaries so could be shared
-# Dcplayer - emit exe file
-#
-# Dlua - lua scripting
-# Djavascript - javascript scripting
-# Dwayland - linux related
-# Dvulkan - Vulcan support
-# Dd3d11 - Direct3D11 support
-#
-# Dgl - OpenGL
-# Dgl-win32 - OpenGL
-# Dgl-dxinterop - OpenGL
-# Dplain-gl - OpenGL
-# Degl-angle-lib - OpenGL
-# Degl-angle-win32 - OpenGL
-#
-# Dvapoursynth - filters
-# Dlcms2 - accurate colors
-# Drubberband - playback speed (0.5x-2x)
-# Duchardet - subtitle encoding detection
-# Dopenal - only need if `--ao=openal`
-#
-# Dlibbluray - blueray
-# Ddvdnav - dvd
-# Dcdda - cd
+# see `./mpv-source/meson.options`
 echo "Configuring ultra-lean mpv engine layout..."
 meson setup "$MPV_TEMP_DIR" \
   --prefix="$MPV_BUILD_DIR" \
   -Dlibmpv=true \
   -Ddefault_library=shared \
   -Dcplayer=false \
+  -Dbuild-date=false \
+  -Dtests=false \
+  -Dfuzzers=false \
   \
-  -Dcaca=disabled \
   -Dd3d11=enabled \
-  -Dlua=disabled \
-  -Djavascript=disabled \
-  \
+  -Dshaderc=enabled \
+  -Dspirv-cross=enabled \
+  -Ddirect3d=disabled \
   -Dgl=disabled \
   -Dgl-win32=disabled \
   -Dgl-dxinterop=disabled \
   -Dplain-gl=disabled \
+  -Degl-angle=disabled \
   -Degl-angle-lib=disabled \
   -Degl-angle-win32=disabled \
+  -Dvulkan=disabled \
   \
-  -Dvapoursynth=disabled\
-  -Drubberband=disabled \
+  -Dd3d-hwaccel=enabled \
+  -Dd3d9-hwaccel=enabled \
+  -Dcuda-hwaccel=disabled \
+  -Dcuda-interop=disabled \
+  -Dvaapi=disabled \
+  -Dvdpau=disabled \
+  \
+  -Dlua=disabled \
+  -Djavascript=disabled \
+  -Dlibcurl=disabled \
+  -Dlibarchive=disabled \
+  -Diconv=disabled \
   -Duchardet=disabled \
-  -Dopenal=disabled \
-  \
+  -Djpeg=disabled \
+  -Dlcms2=disabled \
+  -Dzimg=disabled \
+  -Dsubrandr=disabled \
+  -Dcplugins=disabled \
+  -Ddvbin=disabled \
+  -Dcdda=disabled \
   -Ddvdnav=disabled \
   -Dlibbluray=disabled \
-  -Dcdda=disabled \
-  -Dwayland=disabled
+  -Dvapoursynth=disabled \
+  -Drubberband=disabled \
+  -Dopenal=disabled \
+  \
+  -Dwasapi=enabled \
+  -Dalsa=disabled \
+  -Dpulse=disabled \
+  -Djack=disabled \
+  -Dpipewire=disabled \
+  -Doss-audio=disabled \
+  -Dsndio=disabled \
+  -Dsdl2-audio=disabled \
+  -Dsdl2-video=disabled \
+  -Dsdl2-gamepad=disabled \
+  \
+  -Dcaca=disabled \
+  -Dwayland=disabled \
+  -Dx11=disabled \
+  -Dxv=disabled \
+  -Ddrm=disabled \
+  -Dgbm=disabled \
+  -Dsixel=disabled \
+  \
+  -Dwin32-smtc=disabled \
+  -Dmanpage-build=disabled \
+  -Dhtml-build=disabled \
+  -Dpdf-build=disabled
 
 echo "Compiling mpv binaries and shared library targets..."
 meson compile -C "$MPV_TEMP_DIR"

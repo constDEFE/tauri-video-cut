@@ -1,6 +1,7 @@
 import { create } from "zustand";
 
-import type { AudioTrack, VideoMetadata } from "./types";
+import type { VideoMetadata } from "./types";
+import type { AudioTrack } from "@/shared/types/common";
 
 type State = {
 	player: {
@@ -33,7 +34,7 @@ type Actions = {
 		setPlaying: (playing: boolean) => void;
 		setPaused: (paused: boolean) => void;
 		setVolume: (volume: number) => void;
-		toggleMuted: (muted: boolean) => void;
+		setMuted: (muted: boolean) => void;
 		reset: () => void;
 	};
 	timeline: {
@@ -99,7 +100,7 @@ export const useVideoStore = create<VideoStore>((set, get) => ({
 			setVolume: (volume) => {
 				set((s) => ({ state: { ...s.state, player: { ...s.state.player, volume } } }));
 			},
-			toggleMuted: (muted) => {
+			setMuted: (muted) => {
 				set((s) => ({
 					state: { ...s.state, player: { ...s.state.player, isMuted: muted ?? !s.state.player.isMuted } }
 				}));
@@ -114,7 +115,6 @@ export const useVideoStore = create<VideoStore>((set, get) => ({
 			const store = get();
 
 			store.private._audioTracksMap.clear();
-
 			metadata.audio_tracks.forEach((t) => {
 				store.private._audioTracksMap.set(t.index, t);
 			});
