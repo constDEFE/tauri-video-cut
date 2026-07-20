@@ -39,16 +39,15 @@ pub async fn export_segments(
     let ffmpeg_path = get_ffmpeg_path(&app_handle)?;
     let ffprobe_path = get_ffprobe_path(&app_handle)?;
 
-    let metadata = probe::probe_video(
-        &ffprobe_path,
-        &ffmpeg_path,
-        &request.video_path,
-        process_manager.inner(),
-    )
-    .await?;
-
-    let keyframes =
-        probe::get_keyframes(&ffprobe_path, &request.video_path, process_manager.inner()).await?;
+    let (metadata, keyframes) = tokio::try_join!(
+        probe::probe_video(
+            &ffprobe_path,
+            &ffmpeg_path,
+            &request.video_path,
+            process_manager.inner()
+        ),
+        probe::get_keyframes(&ffprobe_path, &request.video_path, process_manager.inner()),
+    )?;
 
     let total_segments = request.segments.len();
     let mut output_files = Vec::new();

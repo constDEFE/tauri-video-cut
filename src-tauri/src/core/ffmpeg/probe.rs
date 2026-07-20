@@ -45,17 +45,6 @@ struct FFprobeFormat {
     bit_rate: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-struct FFprobePacketsOutput {
-    packets: Vec<FFprobePacket>,
-}
-
-#[derive(Debug, Deserialize)]
-struct FFprobePacket {
-    pts_time: Option<String>,
-    flags: Option<String>,
-}
-
 pub async fn probe_video(
     ffprobe_path: &std::path::Path,
     ffmpeg_path: &std::path::Path,
@@ -311,7 +300,7 @@ pub async fn get_keyframes(
             "-show_entries",
             "packet=pts_time,flags",
             "-of",
-            "json",
+            "csv=p=0",
             video_path,
         ])
         .stdout(Stdio::piped())
@@ -369,21 +358,15 @@ pub async fn get_keyframes(
         )));
     }
 
-    let packets_data: FFprobePacketsOutput =
-        serde_json::from_slice(&output.stdout).map_err(|e| {
-            log_error!(error = %e, "Failed to parse keyframe JSON");
-
-            AppError::FFprobeError(format!("Failed to parse keyframe data: {}", e))
-        })?;
-
     let mut keyframes = Vec::new();
-    for packet in packets_data.packets {
-        if let Some(flags) = packet.flags {
-            if flags.contains('K') {
-                if let Some(time_str) = packet.pts_time {
-                    if let Ok(time) = time_str.parse::<f64>() {
-                        keyframes.push(time);
-                    }
+    for line in output.stdout.split(|&b| b == b'\n') {
+        if !line.contains(&b'K') {
+            continue;
+        }
+        if let Some(comma) = line.iter().position(|&b| b == b',') {
+            if let Ok(pts_str) = std::str::from_utf8(&line[..comma]) {
+                if let Ok(time) = pts_str.parse::<f64>() {
+                    keyframes.push(time);
                 }
             }
         }
