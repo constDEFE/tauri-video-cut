@@ -23,7 +23,7 @@ export const ExportForm = () => {
 
 	return (
 		<div class="mx-auto w-full max-w-2xl">
-			<h1 class="text-accent mb-8 text-4xl font-bold select-none">Export Settings</h1>
+			<h1 class="text-accent mb-8 text-center text-4xl font-bold select-none">Export Settings</h1>
 			<form onSubmit={submitHandler} class="flex flex-col gap-6">
 				<OutputField defaultValue={config.outputFolder} />
 				<PrefixField defaultValue={defaultPrefix} />
