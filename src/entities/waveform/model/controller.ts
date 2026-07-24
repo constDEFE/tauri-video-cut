@@ -61,8 +61,14 @@ export class WaveformController {
 
 	static handleError({ payload }: TauriEvent<WaveformErrorPayload>) {
 		const store = useWaveformStore.getState();
+		const track = store.getters.trackByIdx(payload.trackIndex);
+
+		if (track?.jobId !== payload.jobId) {
+			return;
+		}
+
 		store.actions.setError(payload.trackIndex, payload.jobId, payload.message);
-		store.actions.clearTrack(payload.trackIndex);
+
 		if (this._activeJobIds.get(payload.trackIndex) === payload.jobId) {
 			this._activeJobIds.delete(payload.trackIndex);
 		}
