@@ -60,7 +60,10 @@ export const useTimelineRendering = ({ baseCanvasRef, cursorCanvasRef, container
 
 	const drawBase = useCallback(() => {
 		const canvas = baseCanvasRef.current;
-		const ctx = canvas?.getContext("2d");
+		const ctx = canvas?.getContext("2d", {
+			alpha: false,
+			desynchronized: true
+		});
 
 		if (!canvas || !ctx || duration <= 0) return;
 
@@ -73,7 +76,7 @@ export const useTimelineRendering = ({ baseCanvasRef, cursorCanvasRef, container
 			duration,
 			selectedSegment,
 			theme,
-			waveform: wf && wf.left.length > 0 ? wf : undefined,
+			waveform: wf && wf.rmsLeft.length > 0 ? wf : undefined,
 			totalPoints: wf?.totalPoints
 		});
 	}, [duration, selectedSegment, theme, selectedTrackIdx, baseCanvasRef]);

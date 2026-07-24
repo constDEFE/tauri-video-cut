@@ -31,6 +31,9 @@ export type BaseDrawOptions = {
 
 const U8_NORMALIZE = 1 / 255.0;
 
+const WAVEFORM_NOISE_GATE = 2;
+const RMS_VISUAL_SCALE = 0.8;
+
 const drawVerticalLine = (ctx: CanvasRenderingContext2D, x: number, height: number) => {
 	ctx.beginPath();
 	ctx.moveTo(x, 0);
@@ -38,59 +41,126 @@ const drawVerticalLine = (ctx: CanvasRenderingContext2D, x: number, height: numb
 	ctx.stroke();
 };
 
-const drawWaveformSide = (
+const buildDrawableIndices = (count: number, width: number): number[] => {
+	const maxDrawablePoints = Math.max(2, Math.ceil(width * 2));
+	const step = Math.max(1, Math.floor(count / maxDrawablePoints));
+
+	const indices: number[] = [];
+
+	for (let i = 0; i < count; i += step) {
+		indices.push(i);
+	}
+
+	if (indices.length === 0 || indices[indices.length - 1] !== count - 1) {
+		indices.push(count - 1);
+	}
+
+	return indices;
+};
+
+const drawWaveformSideHybrid = (
 	ctx: CanvasRenderingContext2D,
-	samples: Uint8Array,
+	upSamples: Uint8Array,
+	downSamples: Uint8Array,
+	rmsSamples: Uint8Array | undefined,
 	width: number,
 	centerY: number,
 	waveHeight: number,
 	isTop: boolean,
 	colors: (typeof CANVAS_THEME)[keyof typeof CANVAS_THEME],
-	totalPoints: number
+	totalPoints: number,
+	gain: number
 ) => {
-	const count = samples.length;
+	const count = upSamples.length;
 	if (count === 0 || totalPoints <= 1 || width <= 0) return;
 
-	// ✅ Basic LOD: Don't iterate more points than we have horizontal pixels
-	const maxDrawablePoints = Math.max(2, Math.ceil(width * 2));
-	const step = Math.max(1, Math.floor(count / maxDrawablePoints));
-
+	const indices = buildDrawableIndices(count, width);
 	const stepX = width / (totalPoints - 1);
 	const direction = isTop ? -1 : 1;
 
-	ctx.beginPath();
+	const peakAmpAt = (index: number): number => {
+		const up = upSamples[index] ?? 0;
+		const down = downSamples[index] ?? 0;
+		const raw = Math.max(up, down);
+		if (raw <= WAVEFORM_NOISE_GATE) return 0;
+		return Math.min(1, raw * U8_NORMALIZE * gain);
+	};
+
+	const rmsAmpAt = (index: number): number => {
+		if (!rmsSamples) return 0;
+		const raw = rmsSamples[index] ?? 0;
+		if (raw <= WAVEFORM_NOISE_GATE) return 0;
+		let rmsAmp = Math.min(1, raw * U8_NORMALIZE * gain * RMS_VISUAL_SCALE);
+		const peak = peakAmpAt(index);
+		if (rmsAmp > peak) rmsAmp = peak;
+		return rmsAmp;
+	};
+
+	const peakPath = new Path2D();
+
 	let lastX = 0;
-
-	for (let i = 0; i < count; i += step) {
-		const amp = samples[i]! * U8_NORMALIZE;
-		const x = i * stepX;
+	indices.forEach((index, n) => {
+		const amp = peakAmpAt(index);
+		const x = index * stepX;
 		const y = centerY + direction * amp * waveHeight;
-
-		if (i === 0) ctx.moveTo(x, y);
-		else ctx.lineTo(x, y);
-
+		if (n === 0) peakPath.moveTo(x, y);
+		else peakPath.lineTo(x, y);
 		lastX = x;
-	}
+	});
 
-	// Ensure we connect to the exact end point
-	if ((count - 1) % step !== 0 && count > 0) {
+	if ((count - 1) % (indices[1] ?? 1) !== 0 && count > 0) {
 		const lastIndex = count - 1;
-		const amp = samples[lastIndex]! * U8_NORMALIZE;
 		const x = lastIndex * stepX;
-		const y = centerY + direction * amp * waveHeight;
-		ctx.lineTo(x, y);
+		const y = centerY + direction * peakAmpAt(lastIndex) * waveHeight;
+		peakPath.lineTo(x, y);
 		lastX = x;
 	}
 
+	peakPath.lineTo(lastX, centerY);
+	peakPath.lineTo(0, centerY);
+	peakPath.closePath();
+
+	// 1. Peak Fill
+	ctx.save();
+	ctx.fillStyle = colors.waveform;
+	ctx.globalAlpha = 0.33;
+	ctx.fill(peakPath);
+	ctx.restore();
+
+	// 2. RMS Fill
+	if (rmsSamples?.length) {
+		const rmsPath = new Path2D();
+		let rmsLastX = 0;
+
+		indices.forEach((index, n) => {
+			const amp = rmsAmpAt(index);
+			const x = index * stepX;
+			const y = centerY + direction * amp * waveHeight;
+			if (n === 0) rmsPath.moveTo(x, y);
+			else rmsPath.lineTo(x, y);
+			rmsLastX = x;
+		});
+
+		if ((count - 1) % (indices[1] ?? 1) !== 0 && count > 0) {
+			const lastIndex = count - 1;
+			const x = lastIndex * stepX;
+			const y = centerY + direction * rmsAmpAt(lastIndex) * waveHeight;
+			rmsPath.lineTo(x, y);
+			rmsLastX = x;
+		}
+
+		rmsPath.lineTo(rmsLastX, centerY);
+		rmsPath.lineTo(0, centerY);
+		rmsPath.closePath();
+
+		ctx.fillStyle = colors.waveform;
+		ctx.fill(rmsPath);
+	}
+
+	// 3. Peak Outline
 	ctx.strokeStyle = colors.waveformEdge;
 	ctx.lineWidth = 1;
-	ctx.stroke();
-
-	ctx.lineTo(lastX, centerY);
-	ctx.lineTo(0, centerY);
-	ctx.closePath();
-	ctx.fillStyle = colors.waveform;
-	ctx.fill();
+	ctx.stroke(peakPath);
 };
 
 const drawWaveform = (
@@ -101,18 +171,46 @@ const drawWaveform = (
 	colors: (typeof CANVAS_THEME)[keyof typeof CANVAS_THEME],
 	totalPoints: number
 ) => {
-	if (!waveform.left?.length) return;
+	if (!waveform.leftUp?.length || !waveform.leftDown?.length) return;
 
 	const centerY = height / 2;
-	const waveHeight = height * 0.475; // Split evenly for top/bottom
+	const waveHeight = Math.max(1, height / 2 - 1);
 
-	drawWaveformSide(ctx, waveform.left, width, centerY, waveHeight, true, colors, totalPoints);
-	if (waveform.right?.length) {
-		drawWaveformSide(ctx, waveform.right, width, centerY, waveHeight, false, colors, totalPoints);
+	const gain = typeof waveform.displayGain === "number" && waveform.displayGain > 0 ? waveform.displayGain : 1;
+
+	// Top half: left channel (upward from center)
+	drawWaveformSideHybrid(
+		ctx,
+		waveform.leftUp,
+		waveform.leftDown,
+		waveform.rmsLeft,
+		width,
+		centerY,
+		waveHeight,
+		true,
+		colors,
+		totalPoints,
+		gain
+	);
+
+	// Bottom half: right channel (downward from center)
+	if (waveform.rightUp?.length && waveform.rightDown?.length) {
+		drawWaveformSideHybrid(
+			ctx,
+			waveform.rightUp,
+			waveform.rightDown,
+			waveform.rmsRight,
+			width,
+			centerY,
+			waveHeight,
+			false,
+			colors,
+			totalPoints,
+			gain
+		);
 	}
 };
 
-// ✅ Pure base layer - NO cursor drawing here
 export const drawTimelineBase = (ctx: CanvasRenderingContext2D, options: BaseDrawOptions) => {
 	const { width, height, duration, selectedSegment, theme, waveform, totalPoints } = options;
 	const colors = CANVAS_THEME[theme];

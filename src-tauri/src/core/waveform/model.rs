@@ -41,10 +41,16 @@ pub struct WaveformChunkEvent {
     pub total_points: usize,
     pub progress: f32,
     pub points_per_event: usize,
+
     pub left_rms: Vec<u8>,
     pub right_rms: Vec<u8>,
-    pub left_peak: Vec<u8>,
-    pub right_peak: Vec<u8>,
+
+    pub left_peak_up: Vec<u8>,
+    pub left_peak_down: Vec<u8>,
+    pub right_peak_up: Vec<u8>,
+    pub right_peak_down: Vec<u8>,
+
+    pub chunk_max_peak: u8,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -56,6 +62,9 @@ pub struct WaveformFinishedEvent {
     pub decoded_frames: u64,
     pub expected_frames: u64,
     pub target_rate: u32,
+    pub max_left_peak: u8,
+    pub max_right_peak: u8,
+    pub display_gain: f32,
 }
 
 #[derive(Debug, Clone, Serialize)]

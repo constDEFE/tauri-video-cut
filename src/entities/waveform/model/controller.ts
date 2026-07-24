@@ -11,6 +11,12 @@ import type {
 } from "./types";
 import type { Event as TauriEvent } from "@tauri-apps/api/event";
 
+const toU8 = (data: number[] | Uint8Array | null | undefined): Uint8Array => {
+	if (!data) return new Uint8Array(0);
+
+	return data instanceof Uint8Array ? data : new Uint8Array(data);
+};
+
 export class WaveformController {
 	private static _activeJobIds = new Map<number, string>();
 	private static _startGenerations = new Map<number, number>();
@@ -20,22 +26,34 @@ export class WaveformController {
 	}
 
 	static handleChunk({ payload }: TauriEvent<WaveformChunkPayload>) {
-		useWaveformStore
-			.getState()
-			.actions.appendChunk(
-				payload.trackIndex,
-				payload.jobId,
-				payload.pointOffset,
-				new Uint8Array(payload.leftRms),
-				new Uint8Array(payload.rightRms),
-				new Uint8Array(payload.leftPeak),
-				new Uint8Array(payload.rightPeak),
-				payload.totalPoints
-			);
+		useWaveformStore.getState().actions.appendChunk(
+			payload.trackIndex,
+			payload.jobId,
+			payload.pointOffset,
+			{
+				rmsLeft: toU8(payload.leftRms),
+				rmsRight: toU8(payload.rightRms),
+				leftUp: toU8(payload.leftPeakUp),
+				leftDown: toU8(payload.leftPeakDown),
+				rightUp: toU8(payload.rightPeakUp),
+				rightDown: toU8(payload.rightPeakDown)
+			},
+			payload.totalPoints,
+			payload.chunkMaxPeak
+		);
 	}
 
 	static handleFinished({ payload }: TauriEvent<WaveformFinishedPayload>) {
-		useWaveformStore.getState().actions.setFinished(payload.trackIndex, payload.jobId);
+		useWaveformStore
+			.getState()
+			.actions.setFinished(
+				payload.trackIndex,
+				payload.jobId,
+				payload.maxLeftPeak,
+				payload.maxRightPeak,
+				payload.displayGain
+			);
+
 		if (this._activeJobIds.get(payload.trackIndex) === payload.jobId) {
 			this._activeJobIds.delete(payload.trackIndex);
 		}
@@ -73,7 +91,6 @@ export class WaveformController {
 
 		const generation = (this._startGenerations.get(trackIndex) ?? 0) + 1;
 		this._startGenerations.set(trackIndex, generation);
-
 		this.cancelTrack(trackIndex);
 
 		const emitted = useWaveformStore.getState().getters.emittedPointsByTrackIdx(trackIndex);
@@ -88,23 +105,23 @@ export class WaveformController {
 			}
 		});
 
-		// Superseded by a newer startWaveform call while awaiting
 		if (this._startGenerations.get(trackIndex) !== generation) {
 			invoke("cancel_waveform", { jobId: response.jobId }).catch(() => {});
 			return response;
 		}
 
 		if (response.cachedData) {
-			const { leftRms, rightRms, leftPeak, rightPeak } = response.cachedData;
 			const clamp = (arr: number[]) => (arr.length > response.totalPoints ? arr.slice(0, response.totalPoints) : arr);
 			useWaveformStore.getState().actions.setCachedData(
 				trackIndex,
 				response.jobId,
 				{
-					left: new Uint8Array(clamp(leftRms)),
-					right: new Uint8Array(clamp(rightRms)),
-					peakLeft: new Uint8Array(clamp(leftPeak)),
-					peakRight: new Uint8Array(clamp(rightPeak))
+					rmsLeft: toU8(clamp(response.cachedData.leftRms)),
+					rmsRight: toU8(clamp(response.cachedData.rightRms)),
+					leftUp: toU8(clamp(response.cachedData.leftPeakUp)),
+					leftDown: toU8(clamp(response.cachedData.leftPeakDown)),
+					rightUp: toU8(clamp(response.cachedData.rightPeakUp)),
+					rightDown: toU8(clamp(response.cachedData.rightPeakDown))
 				},
 				response.totalPoints
 			);

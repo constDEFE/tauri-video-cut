@@ -6,7 +6,7 @@ use crate::utils::paths::app_temp_dir;
 
 pub const CACHE_VERSION: u32 = 1;
 pub const CACHE_HEADER_SIZE: u64 = 8; // magic(4) + version(4)
-pub const POINT_SIZE: u64 = 4; // 4 channels * bytes_per_point (u8)
+pub const POINT_SIZE: u64 = 6; // rms_l, rms_r, up_l, down_l, up_r, down_r
 
 pub fn get_cache_path(
     video_path: &str,

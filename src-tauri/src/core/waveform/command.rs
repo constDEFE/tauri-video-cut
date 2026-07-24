@@ -53,26 +53,42 @@ pub async fn stream_waveform(
     let cache_state = CacheState::open(&cache_path, 0)?;
     let cached_points = cache_state.cached_points;
 
-    // command.rs - Replace the fully cached data parsing block
     if cached_points >= TOTAL_WAVEFORM_POINTS {
-        log_info!(job_id = %job_id, cached_points, track = request.track_index, "Waveform fully cached; returning from cache");
+        log_info!(
+            job_id = %job_id,
+            cached_points,
+            track = request.track_index,
+            "Waveform fully cached; returning from cache"
+        );
 
         let mut data = vec![0u8; cached_points * POINT_SIZE as usize];
         if let Ok(mut file) = File::open(&cache_path) {
             let seek_pos = CACHE_HEADER_SIZE;
             let _ = file.seek(SeekFrom::Start(seek_pos));
             if file.read_exact(&mut data).is_ok() {
-                // ✅ FIX: De-interleave the data correctly
                 let mut left_rms = Vec::with_capacity(cached_points);
                 let mut right_rms = Vec::with_capacity(cached_points);
-                let mut left_peak = Vec::with_capacity(cached_points);
-                let mut right_peak = Vec::with_capacity(cached_points);
+                let mut left_peak_up = Vec::with_capacity(cached_points);
+                let mut left_peak_down = Vec::with_capacity(cached_points);
+                let mut right_peak_up = Vec::with_capacity(cached_points);
+                let mut right_peak_down = Vec::with_capacity(cached_points);
+
+                let mut chunk_max_peak: u8 = 0;
 
                 for chunk in data.chunks_exact(POINT_SIZE as usize) {
+                    let up_l = chunk[2];
+                    let down_l = chunk[3];
+                    let up_r = chunk[4];
+                    let down_r = chunk[5];
+
                     left_rms.push(chunk[0]);
                     right_rms.push(chunk[1]);
-                    left_peak.push(chunk[2]);
-                    right_peak.push(chunk[3]);
+                    left_peak_up.push(up_l);
+                    left_peak_down.push(down_l);
+                    right_peak_up.push(up_r);
+                    right_peak_down.push(down_r);
+
+                    chunk_max_peak = chunk_max_peak.max(up_l).max(down_l).max(up_r).max(down_r);
                 }
 
                 return Ok(StartWaveformResponse {
@@ -92,8 +108,11 @@ pub async fn stream_waveform(
                         points_per_event,
                         left_rms,
                         right_rms,
-                        left_peak,
-                        right_peak,
+                        left_peak_up,
+                        left_peak_down,
+                        right_peak_up,
+                        right_peak_down,
+                        chunk_max_peak,
                     }),
                 });
             }
@@ -126,7 +145,12 @@ pub async fn stream_waveform(
 
         if let Err(message) = result {
             if message != "Job cancelled by user" {
-                log_error!(job_id = %task_job_id, track = task_track_index, error = %message, "Waveform streaming failed");
+                log_error!(
+                    job_id = %task_job_id,
+                    track = task_track_index,
+                    error = %message,
+                    "Waveform streaming failed"
+                );
 
                 let _ = app.emit(
                     "waveform://error",

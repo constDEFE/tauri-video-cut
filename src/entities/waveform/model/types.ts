@@ -7,10 +7,16 @@ export type WaveformChunkPayload = {
 	totalPoints: number;
 	progress: number;
 	pointsPerEvent: number;
+
 	leftRms: number[];
 	rightRms: number[];
-	leftPeak: number[];
-	rightPeak: number[];
+
+	leftPeakUp: number[];
+	leftPeakDown: number[];
+	rightPeakUp: number[];
+	rightPeakDown: number[];
+
+	chunkMaxPeak: number;
 };
 
 export type WaveformFinishedPayload = {
@@ -20,6 +26,9 @@ export type WaveformFinishedPayload = {
 	decodedFrames: number;
 	expectedFrames: number;
 	targetRate: number;
+	maxLeftPeak: number;
+	maxRightPeak: number;
+	displayGain: number;
 };
 
 export type WaveformErrorPayload = {
@@ -39,10 +48,5 @@ export type StartWaveformResponse = {
 	pointsPerEvent: number;
 	eventCount: number;
 	targetRate: number;
-	cachedData: {
-		leftRms: number[];
-		rightRms: number[];
-		leftPeak: number[];
-		rightPeak: number[];
-	} | null;
+	cachedData: WaveformChunkPayload | null;
 };

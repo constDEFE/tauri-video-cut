@@ -3,10 +3,12 @@ import { create } from "zustand";
 import { jobSeq } from "../lib";
 
 type RawTrackData = {
-	left: Uint8Array;
-	right: Uint8Array;
-	peakLeft: Uint8Array;
-	peakRight: Uint8Array;
+	rmsLeft: Uint8Array;
+	rmsRight: Uint8Array;
+	leftUp: Uint8Array;
+	leftDown: Uint8Array;
+	rightUp: Uint8Array;
+	rightDown: Uint8Array;
 };
 
 type TrackState = {
@@ -16,6 +18,8 @@ type TrackState = {
 	filledPoints: number;
 	finished: boolean;
 	error: string | null;
+	maxPeak: number;
+	displayGain: number;
 };
 
 type State = {
@@ -29,8 +33,29 @@ type Private = {
 
 type Getters = {
 	trackByIdx: (trackIndex: number) => TrackState | undefined;
-	waveformByTrackIdx: (trackIndex: number) => { left: Uint8Array; right: Uint8Array; totalPoints: number } | undefined;
+	waveformByTrackIdx: (trackIndex: number) =>
+		| {
+				rmsLeft: Uint8Array;
+				rmsRight: Uint8Array;
+				leftUp: Uint8Array;
+				leftDown: Uint8Array;
+				rightUp: Uint8Array;
+				rightDown: Uint8Array;
+				totalPoints: number;
+				maxPeak: number;
+				displayGain: number;
+		  }
+		| undefined;
 	emittedPointsByTrackIdx: (trackIndex: number) => number;
+};
+
+type WaveformChunkArrays = {
+	rmsLeft: Uint8Array;
+	rmsRight: Uint8Array;
+	leftUp: Uint8Array;
+	leftDown: Uint8Array;
+	rightUp: Uint8Array;
+	rightDown: Uint8Array;
 };
 
 type Actions = {
@@ -39,15 +64,19 @@ type Actions = {
 		trackIndex: number,
 		jobId: string,
 		pointOffset: number,
-		left: Uint8Array,
-		right: Uint8Array,
-		peakLeft: Uint8Array,
-		peakRight: Uint8Array,
-		totalPoints: number
+		arrays: WaveformChunkArrays,
+		totalPoints: number,
+		chunkMaxPeak?: number
 	) => void;
 	clearTrack: (trackIndex: number) => void;
 	setCachedData: (trackIndex: number, jobId: string, data: RawTrackData, totalPoints: number) => void;
-	setFinished: (trackIndex: number, jobId: string) => void;
+	setFinished: (
+		trackIndex: number,
+		jobId: string,
+		maxLeftPeak?: number,
+		maxRightPeak?: number,
+		displayGain?: number
+	) => void;
 	setError: (trackIndex: number, jobId: string, message: string) => void;
 	reset: () => void;
 };
@@ -59,11 +88,40 @@ export type WaveformStore = {
 	actions: Actions;
 };
 
+const WAVEFORM_TARGET_AMP = 0.9;
+const WAVEFORM_MAX_GAIN = 4;
+
+const computeDisplayGain = (maxPeak: number): number => {
+	if (!maxPeak || maxPeak <= 0) return 1;
+	return Math.min((WAVEFORM_TARGET_AMP * 255) / maxPeak, WAVEFORM_MAX_GAIN);
+};
+
+const computeMaxPeak = (up: Uint8Array, down: Uint8Array, up2?: Uint8Array, down2?: Uint8Array): number => {
+	let max = 0;
+	for (let i = 0; i < up.length; i++) {
+		const u = up[i]!;
+		const d = down[i]!;
+		if (u > max) max = u;
+		if (d > max) max = d;
+	}
+	if (up2 && down2) {
+		for (let i = 0; i < up2.length; i++) {
+			const u = up2[i]!;
+			const d = down2[i]!;
+			if (u > max) max = u;
+			if (d > max) max = d;
+		}
+	}
+	return max;
+};
+
 const allocBuffers = (totalPoints: number): RawTrackData => ({
-	left: new Uint8Array(totalPoints),
-	right: new Uint8Array(totalPoints),
-	peakLeft: new Uint8Array(totalPoints),
-	peakRight: new Uint8Array(totalPoints)
+	rmsLeft: new Uint8Array(totalPoints),
+	rmsRight: new Uint8Array(totalPoints),
+	leftUp: new Uint8Array(totalPoints),
+	leftDown: new Uint8Array(totalPoints),
+	rightUp: new Uint8Array(totalPoints),
+	rightDown: new Uint8Array(totalPoints)
 });
 
 export const useWaveformStore = create<WaveformStore>((set, get) => ({
@@ -86,9 +144,15 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
 			}
 
 			return {
-				left: track.data.left.subarray(0, track.filledPoints),
-				right: track.data.right.subarray(0, track.filledPoints),
-				totalPoints: track.totalPoints
+				rmsLeft: track.data.rmsLeft.subarray(0, track.filledPoints),
+				rmsRight: track.data.rmsRight.subarray(0, track.filledPoints),
+				leftUp: track.data.leftUp.subarray(0, track.filledPoints),
+				leftDown: track.data.leftDown.subarray(0, track.filledPoints),
+				rightUp: track.data.rightUp.subarray(0, track.filledPoints),
+				rightDown: track.data.rightDown.subarray(0, track.filledPoints),
+				totalPoints: track.totalPoints,
+				maxPeak: track.maxPeak,
+				displayGain: track.displayGain
 			};
 		},
 		emittedPointsByTrackIdx: (trackIdx) => {
@@ -104,9 +168,23 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
 				return;
 			}
 
-			const trackBody = track
-				? { ...track, jobId }
-				: { jobId, data: allocBuffers(totalPoints), totalPoints, filledPoints: 0, finished: false, error: null };
+			const trackBody: TrackState = track
+				? {
+						...track,
+						jobId,
+						maxPeak: track.maxPeak ?? 0,
+						displayGain: track.displayGain ?? 1
+					}
+				: {
+						jobId,
+						data: allocBuffers(totalPoints),
+						totalPoints,
+						filledPoints: 0,
+						finished: false,
+						error: null,
+						maxPeak: 0,
+						displayGain: 1
+					};
 
 			if (!track) {
 				store.private._emittedPoints.set(trackIndex, 0);
@@ -122,7 +200,7 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
 
 			set({ state: { waveformUpdateCounter: store.state.waveformUpdateCounter + 1 } });
 		},
-		appendChunk: (trackIndex, jobId, pointOffset, left, right, peakLeft, peakRight, totalPoints) => {
+		appendChunk: (trackIndex, jobId, pointOffset, arrays, totalPoints, chunkMaxPeak) => {
 			const store = get();
 			let track = store.private._tracks.get(trackIndex);
 
@@ -133,7 +211,9 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
 					totalPoints,
 					filledPoints: 0,
 					finished: false,
-					error: null
+					error: null,
+					maxPeak: 0,
+					displayGain: 1
 				};
 			} else if (track.jobId !== jobId) {
 				if (jobSeq(track.jobId) > jobSeq(jobId)) {
@@ -143,18 +223,31 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
 				track = { ...track, jobId, finished: false, error: null };
 			}
 
-			if (pointOffset < 0 || pointOffset + left.length > track.totalPoints) {
+			if (pointOffset < 0 || pointOffset + arrays.leftUp.length > track.totalPoints) {
 				return;
 			}
 
-			track.data.left.set(left, pointOffset);
-			track.data.right.set(right, pointOffset);
-			track.data.peakLeft.set(peakLeft, pointOffset);
-			track.data.peakRight.set(peakRight, pointOffset);
+			track.data.rmsLeft.set(arrays.rmsLeft, pointOffset);
+			track.data.rmsRight.set(arrays.rmsRight, pointOffset);
+			track.data.leftUp.set(arrays.leftUp, pointOffset);
+			track.data.leftDown.set(arrays.leftDown, pointOffset);
+			track.data.rightUp.set(arrays.rightUp, pointOffset);
+			track.data.rightDown.set(arrays.rightDown, pointOffset);
 
-			const filledPoints = Math.max(track.filledPoints, pointOffset + left.length);
+			const filledPoints = Math.max(track.filledPoints, pointOffset + arrays.leftUp.length);
 
-			store.private._tracks.set(trackIndex, { ...track, filledPoints });
+			let maxPeak = track.maxPeak ?? 0;
+			if (typeof chunkMaxPeak === "number" && chunkMaxPeak > maxPeak) {
+				maxPeak = chunkMaxPeak;
+			}
+
+			store.private._tracks.set(trackIndex, {
+				...track,
+				filledPoints,
+				maxPeak,
+				displayGain: computeDisplayGain(maxPeak)
+			});
+
 			store.private._emittedPoints.set(trackIndex, filledPoints);
 
 			set({ state: { waveformUpdateCounter: store.state.waveformUpdateCounter + 1 } });
@@ -167,19 +260,23 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
 				return;
 			}
 
-			store.private._emittedPoints.set(trackIndex, data.left.length);
+			const maxPeak = computeMaxPeak(data.leftUp, data.leftDown, data.rightUp, data.rightDown);
+
+			store.private._emittedPoints.set(trackIndex, data.leftUp.length);
 			store.private._tracks.set(trackIndex, {
 				jobId,
 				data,
 				totalPoints,
-				filledPoints: data.left.length,
+				filledPoints: data.leftUp.length,
 				finished: true,
-				error: null
+				error: null,
+				maxPeak,
+				displayGain: computeDisplayGain(maxPeak)
 			});
 
 			set({ state: { waveformUpdateCounter: store.state.waveformUpdateCounter + 1 } });
 		},
-		setFinished: (trackIndex, jobId) => {
+		setFinished: (trackIndex, jobId, maxLeftPeak, maxRightPeak, backendDisplayGain) => {
 			const store = get();
 			const track = store.private._tracks.get(trackIndex);
 
@@ -187,7 +284,19 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
 				return;
 			}
 
-			store.private._tracks.set(trackIndex, { ...track, finished: true });
+			const backendMaxPeak = Math.max(maxLeftPeak ?? 0, maxRightPeak ?? 0);
+			const maxPeak = Math.max(track.maxPeak ?? 0, backendMaxPeak);
+
+			const displayGain = maxPeak > 0 ? computeDisplayGain(maxPeak) : (backendDisplayGain ?? 1);
+
+			store.private._tracks.set(trackIndex, {
+				...track,
+				finished: true,
+				maxPeak,
+				displayGain
+			});
+
+			set({ state: { waveformUpdateCounter: store.state.waveformUpdateCounter + 1 } });
 		},
 		setError: (trackIndex, jobId, message) => {
 			const store = get();
