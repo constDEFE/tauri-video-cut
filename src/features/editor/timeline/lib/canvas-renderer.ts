@@ -19,6 +19,15 @@ export const CANVAS_THEME = {
 	}
 } as const;
 
+type Column = {
+	i0: number;
+	i1: number;
+	x: number;
+	up: number;
+	down: number;
+	rms: number;
+};
+
 export type BaseDrawOptions = {
 	width: number;
 	height: number;
@@ -34,28 +43,47 @@ const U8_NORMALIZE = 1 / 255.0;
 const WAVEFORM_NOISE_GATE = 2;
 const RMS_VISUAL_SCALE = 0.8;
 
+const buildColumns = (
+	count: number,
+	width: number,
+	totalPoints: number,
+	upSamples: Uint8Array,
+	downSamples: Uint8Array,
+	rmsSamples: Uint8Array | undefined
+): Column[] => {
+	const stepX = width / (totalPoints - 1);
+	const needsAggregation = count > Math.max(2, Math.floor(width * 2));
+	const cols = needsAggregation ? Math.max(2, Math.floor(width * 2)) : count;
+	const out: Column[] = [];
+	for (let c = 0; c < cols; c++) {
+		const i0 = needsAggregation ? Math.floor((c * count) / cols) : c;
+		const i1 = needsAggregation ? Math.max(i0 + 1, Math.floor(((c + 1) * count) / cols)) : i0 + 1;
+
+		let up = 0;
+		let down = 0;
+		let rms = 0;
+		for (let i = i0; i < i1; i++) {
+			const u = upSamples[i] ?? 0;
+			const d = downSamples[i] ?? 0;
+			if (u > up) up = u;
+			if (d > down) down = d;
+			if (rmsSamples) {
+				const r = rmsSamples[i] ?? 0;
+				if (r > rms) rms = r;
+			}
+		}
+		const midIndex = (i0 + i1 - 1) / 2;
+		out.push({ i0, i1, x: midIndex * stepX, up, down, rms });
+	}
+
+	return out;
+};
+
 const drawVerticalLine = (ctx: CanvasRenderingContext2D, x: number, height: number) => {
 	ctx.beginPath();
 	ctx.moveTo(x, 0);
 	ctx.lineTo(x, height);
 	ctx.stroke();
-};
-
-const buildDrawableIndices = (count: number, width: number): number[] => {
-	const maxDrawablePoints = Math.max(2, Math.ceil(width * 2));
-	const step = Math.max(1, Math.floor(count / maxDrawablePoints));
-
-	const indices: number[] = [];
-
-	for (let i = 0; i < count; i += step) {
-		indices.push(i);
-	}
-
-	if (indices.length === 0 || indices[indices.length - 1] !== count - 1) {
-		indices.push(count - 1);
-	}
-
-	return indices;
 };
 
 const drawWaveformSideHybrid = (
@@ -74,90 +102,60 @@ const drawWaveformSideHybrid = (
 	const count = upSamples.length;
 	if (count === 0 || totalPoints <= 1 || width <= 0) return;
 
-	const indices = buildDrawableIndices(count, width);
-	const stepX = width / (totalPoints - 1);
+	const columns = buildColumns(count, width, totalPoints, upSamples, downSamples, rmsSamples);
 	const direction = isTop ? -1 : 1;
 
-	const peakAmpAt = (index: number): number => {
-		const up = upSamples[index] ?? 0;
-		const down = downSamples[index] ?? 0;
-		const raw = Math.max(up, down);
+	const peakAmp = (col: Column) => {
+		const raw = Math.max(col.up, col.down);
 		if (raw <= WAVEFORM_NOISE_GATE) return 0;
 		return Math.min(1, raw * U8_NORMALIZE * gain);
 	};
 
-	const rmsAmpAt = (index: number): number => {
+	const rmsAmp = (col: Column) => {
 		if (!rmsSamples) return 0;
-		const raw = rmsSamples[index] ?? 0;
-		if (raw <= WAVEFORM_NOISE_GATE) return 0;
-		let rmsAmp = Math.min(1, raw * U8_NORMALIZE * gain * RMS_VISUAL_SCALE);
-		const peak = peakAmpAt(index);
-		if (rmsAmp > peak) rmsAmp = peak;
-		return rmsAmp;
+		if (col.rms <= WAVEFORM_NOISE_GATE) return 0;
+		let a = Math.min(1, col.rms * U8_NORMALIZE * gain * RMS_VISUAL_SCALE);
+		const p = peakAmp(col);
+		if (a > p) a = p;
+		return a;
 	};
 
 	const peakPath = new Path2D();
 
-	let lastX = 0;
-	indices.forEach((index, n) => {
-		const amp = peakAmpAt(index);
-		const x = index * stepX;
-		const y = centerY + direction * amp * waveHeight;
-		if (n === 0) peakPath.moveTo(x, y);
-		else peakPath.lineTo(x, y);
-		lastX = x;
+	columns.forEach((col, n) => {
+		const y = centerY + direction * peakAmp(col) * waveHeight;
+		if (n === 0) peakPath.moveTo(col.x, y);
+		else peakPath.lineTo(col.x, y);
 	});
 
-	if ((count - 1) % (indices[1] ?? 1) !== 0 && count > 0) {
-		const lastIndex = count - 1;
-		const x = lastIndex * stepX;
-		const y = centerY + direction * peakAmpAt(lastIndex) * waveHeight;
-		peakPath.lineTo(x, y);
-		lastX = x;
-	}
+	const last = columns[columns.length - 1];
 
-	peakPath.lineTo(lastX, centerY);
-	peakPath.lineTo(0, centerY);
+	peakPath.lineTo(last!.x, centerY);
+	peakPath.lineTo(columns[0]!.x, centerY);
 	peakPath.closePath();
 
-	// 1. Peak Fill
 	ctx.save();
 	ctx.fillStyle = colors.waveform;
 	ctx.globalAlpha = 0.33;
 	ctx.fill(peakPath);
 	ctx.restore();
 
-	// 2. RMS Fill
 	if (rmsSamples?.length) {
 		const rmsPath = new Path2D();
-		let rmsLastX = 0;
 
-		indices.forEach((index, n) => {
-			const amp = rmsAmpAt(index);
-			const x = index * stepX;
-			const y = centerY + direction * amp * waveHeight;
-			if (n === 0) rmsPath.moveTo(x, y);
-			else rmsPath.lineTo(x, y);
-			rmsLastX = x;
+		columns.forEach((col, n) => {
+			const y = centerY + direction * rmsAmp(col) * waveHeight;
+			if (n === 0) rmsPath.moveTo(col.x, y);
+			else rmsPath.lineTo(col.x, y);
 		});
 
-		if ((count - 1) % (indices[1] ?? 1) !== 0 && count > 0) {
-			const lastIndex = count - 1;
-			const x = lastIndex * stepX;
-			const y = centerY + direction * rmsAmpAt(lastIndex) * waveHeight;
-			rmsPath.lineTo(x, y);
-			rmsLastX = x;
-		}
-
-		rmsPath.lineTo(rmsLastX, centerY);
-		rmsPath.lineTo(0, centerY);
+		rmsPath.lineTo(last!.x, centerY);
+		rmsPath.lineTo(columns[0]!.x, centerY);
 		rmsPath.closePath();
-
 		ctx.fillStyle = colors.waveform;
 		ctx.fill(rmsPath);
 	}
 
-	// 3. Peak Outline
 	ctx.strokeStyle = colors.waveformEdge;
 	ctx.lineWidth = 1;
 	ctx.stroke(peakPath);

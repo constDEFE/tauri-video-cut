@@ -17,6 +17,8 @@ export type WaveformChunkPayload = {
 	rightPeakDown: number[];
 
 	chunkMaxPeak: number;
+
+	displayGain: number;
 };
 
 export type WaveformFinishedPayload = {

@@ -51,6 +51,8 @@ pub struct WaveformChunkEvent {
     pub right_peak_down: Vec<u8>,
 
     pub chunk_max_peak: u8,
+
+    pub display_gain: f32,
 }
 
 #[derive(Debug, Clone, Serialize)]

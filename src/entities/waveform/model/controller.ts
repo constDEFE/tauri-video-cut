@@ -39,7 +39,8 @@ export class WaveformController {
 				rightDown: toU8(payload.rightPeakDown)
 			},
 			payload.totalPoints,
-			payload.chunkMaxPeak
+			payload.chunkMaxPeak,
+			payload.displayGain
 		);
 	}
 

@@ -1,7 +1,7 @@
-use crate::core::waveform::cache::{CACHE_HEADER_SIZE, CacheState, POINT_SIZE};
+use crate::core::waveform::cache::{POINT_SIZE, decode_point, probe, read_raw_points};
 use crate::core::waveform::engine::{
-    duration_to_expected_frames, event_count_for, quantize_duration_ms, resolve_points_per_event,
-    resolve_target_rate, run_waveform_job,
+    compute_display_gain, duration_to_expected_frames, event_count_for, quantize_duration_ms,
+    resolve_points_per_event, resolve_target_rate, run_waveform_job,
 };
 use crate::core::waveform::model::{
     StartWaveformResponse, StreamWaveformRequest, TOTAL_WAVEFORM_POINTS, WaveformChunkEvent,
@@ -11,8 +11,6 @@ use crate::core::waveform::registry::WaveformJobRegistry;
 use crate::core::waveform::registry::next_job_id;
 use crate::logger::{log_debug, log_error, log_info};
 use crate::utils::paths::get_ffmpeg_path;
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
 use tauri::{AppHandle, Emitter, State};
 use tokio_util::sync::CancellationToken;
 
@@ -46,12 +44,9 @@ pub async fn stream_waveform(
         &request.video_path,
         request.track_index,
         target_rate,
-        points_per_event,
         quantized_duration,
     )?;
-
-    let cache_state = CacheState::open(&cache_path, 0)?;
-    let cached_points = cache_state.cached_points;
+    let cached_points = probe(&cache_path);
 
     if cached_points >= TOTAL_WAVEFORM_POINTS {
         log_info!(
@@ -61,61 +56,50 @@ pub async fn stream_waveform(
             "Waveform fully cached; returning from cache"
         );
 
-        let mut data = vec![0u8; cached_points * POINT_SIZE as usize];
-        if let Ok(mut file) = File::open(&cache_path) {
-            let seek_pos = CACHE_HEADER_SIZE;
-            let _ = file.seek(SeekFrom::Start(seek_pos));
-            if file.read_exact(&mut data).is_ok() {
-                let mut left_rms = Vec::with_capacity(cached_points);
-                let mut right_rms = Vec::with_capacity(cached_points);
-                let mut left_peak_up = Vec::with_capacity(cached_points);
-                let mut left_peak_down = Vec::with_capacity(cached_points);
-                let mut right_peak_up = Vec::with_capacity(cached_points);
-                let mut right_peak_down = Vec::with_capacity(cached_points);
-
-                let mut chunk_max_peak: u8 = 0;
-
-                for chunk in data.chunks_exact(POINT_SIZE as usize) {
-                    let up_l = chunk[2];
-                    let down_l = chunk[3];
-                    let up_r = chunk[4];
-                    let down_r = chunk[5];
-
-                    left_rms.push(chunk[0]);
-                    right_rms.push(chunk[1]);
-                    left_peak_up.push(up_l);
-                    left_peak_down.push(down_l);
-                    right_peak_up.push(up_r);
-                    right_peak_down.push(down_r);
-
-                    chunk_max_peak = chunk_max_peak.max(up_l).max(down_l).max(up_r).max(down_r);
-                }
-
-                return Ok(StartWaveformResponse {
-                    job_id: job_id.clone(),
-                    total_points: TOTAL_WAVEFORM_POINTS,
-                    points_per_event,
-                    event_count: event_count_for(points_per_event),
-                    target_rate,
-                    cached_data: Some(WaveformChunkEvent {
-                        job_id: job_id.clone(),
-                        track_index: request.track_index,
-                        chunk_index: 0,
-                        point_offset: 0,
-                        point_count: cached_points,
-                        total_points: TOTAL_WAVEFORM_POINTS,
-                        progress: 1.0,
-                        points_per_event,
-                        left_rms,
-                        right_rms,
-                        left_peak_up,
-                        left_peak_down,
-                        right_peak_up,
-                        right_peak_down,
-                        chunk_max_peak,
-                    }),
-                });
+        if let Ok(data) = read_raw_points(&cache_path, 0, cached_points) {
+            let mut left_rms = Vec::with_capacity(cached_points);
+            let mut right_rms = Vec::with_capacity(cached_points);
+            let mut left_peak_up = Vec::with_capacity(cached_points);
+            let mut left_peak_down = Vec::with_capacity(cached_points);
+            let mut right_peak_up = Vec::with_capacity(cached_points);
+            let mut right_peak_down = Vec::with_capacity(cached_points);
+            let mut chunk_max_peak: u8 = 0;
+            for chunk in data.chunks_exact(POINT_SIZE as usize) {
+                let (rl, rr, up_l, down_l, up_r, down_r) = decode_point(chunk);
+                left_rms.push(rl);
+                right_rms.push(rr);
+                left_peak_up.push(up_l);
+                left_peak_down.push(down_l);
+                right_peak_up.push(up_r);
+                right_peak_down.push(down_r);
+                chunk_max_peak = chunk_max_peak.max(up_l).max(down_l).max(up_r).max(down_r);
             }
+            let display_gain = compute_display_gain(chunk_max_peak);
+            return Ok(StartWaveformResponse {
+                job_id: job_id.clone(),
+                total_points: TOTAL_WAVEFORM_POINTS,
+                points_per_event,
+                event_count: event_count_for(points_per_event),
+                target_rate,
+                cached_data: Some(WaveformChunkEvent {
+                    job_id: job_id.clone(),
+                    track_index: request.track_index,
+                    chunk_index: 0,
+                    point_offset: 0,
+                    point_count: cached_points,
+                    total_points: TOTAL_WAVEFORM_POINTS,
+                    progress: 1.0,
+                    points_per_event,
+                    left_rms,
+                    right_rms,
+                    left_peak_up,
+                    left_peak_down,
+                    right_peak_up,
+                    right_peak_down,
+                    chunk_max_peak,
+                    display_gain,
+                }),
+            });
         }
     }
 

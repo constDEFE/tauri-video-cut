@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
+use std::io::{BufWriter, Write};
 use tauri::AppHandle;
 use tauri::Emitter;
 use tokio::io::AsyncReadExt;
@@ -8,7 +8,9 @@ use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 
 use crate::core::ProcessManager;
-use crate::core::waveform::cache::{CACHE_HEADER_SIZE, CacheState, POINT_SIZE, get_cache_path};
+use crate::core::waveform::cache::{
+    POINT_SIZE, decode_point, get_cache_path, open_writer, probe, read_raw_points,
+};
 use crate::core::waveform::model::{
     DEFAULT_POINTS_PER_EVENT, StreamWaveformRequest, TOTAL_WAVEFORM_POINTS, WaveformChunkEvent,
     WaveformFinishedEvent,
@@ -17,12 +19,12 @@ use crate::logger::{log_error, log_info, log_warn};
 
 pub const BYTES_PER_SAMPLE: usize = 4;
 pub const BYTES_PER_FRAME: usize = 2 * BYTES_PER_SAMPLE;
-const READ_BUFFER_SIZE: usize = 64 * 1024;
+const READ_BUFFER_SIZE: usize = 1024 * 1024;
 
 const DISPLAY_TARGET_AMP: f64 = 0.9 * 255.0;
 const DISPLAY_MAX_GAIN: f64 = 4.0;
 
-fn compute_display_gain(max_peak: u8) -> f32 {
+pub fn compute_display_gain(max_peak: u8) -> f32 {
     if max_peak == 0 {
         return 1.0;
     }
@@ -44,7 +46,9 @@ fn choose_auto_target_rate(duration_seconds: f64) -> u32 {
     const MIN_RATE: f64 = 2_000.0;
     const MAX_RATE: f64 = 12_000.0;
     const SAMPLES_PER_POINT: f64 = 64.0;
-    let candidate = (TOTAL_WAVEFORM_POINTS as f64 * SAMPLES_PER_POINT) / duration_seconds;
+
+    let candidate =
+        (TOTAL_WAVEFORM_POINTS as f64 * SAMPLES_PER_POINT) / duration_seconds.max(0.001);
     candidate.clamp(MIN_RATE, MAX_RATE).round() as u32
 }
 
@@ -53,8 +57,13 @@ pub fn resolve_target_rate(
     target_rate: Option<u32>,
     audio_tracks_sample_rate: Option<u32>,
 ) -> u32 {
+    const MAX_ALLOWED_RATE: u32 = 12_000;
     if let Some(rate) = target_rate {
-        return rate.max(1);
+        let mut resolved = rate.clamp(1, MAX_ALLOWED_RATE);
+        if let Some(source_rate) = audio_tracks_sample_rate.filter(|&s| s > 0) {
+            resolved = resolved.min(source_rate);
+        }
+        return resolved;
     }
     let auto = choose_auto_target_rate(duration_seconds);
     match audio_tracks_sample_rate {
@@ -84,6 +93,7 @@ fn emit_batch(
     right_peak_down: Vec<u8>,
     chunk_max_peak: u8,
     point_offset: usize,
+    display_gain: f32,
 ) -> Result<(), String> {
     let point_count = left_rms.len();
     if point_count == 0 {
@@ -110,6 +120,7 @@ fn emit_batch(
             right_peak_up,
             right_peak_down,
             chunk_max_peak,
+            display_gain,
         },
     )
     .map_err(|error| format!("Failed to emit waveform chunk: {error}"))
@@ -284,52 +295,54 @@ impl WaveformState {
         }
     }
 
-    fn flush_current_batch(
+    fn drain_outputs(
         &mut self,
         app: &AppHandle,
         job_id: &str,
         track_index: u32,
         points_per_event: usize,
     ) -> Result<(), String> {
-        if self.output_left_rms.len() >= points_per_event {
-            self.write_batch_to_cache(job_id);
-            let offset = self.emitted_points - self.output_left_rms.len();
-            let chunk_max_peak = self.batch_max_peak;
-            self.batch_max_peak = 0;
-            emit_batch(
-                app,
-                job_id,
-                track_index,
-                points_per_event,
-                std::mem::replace(
-                    &mut self.output_left_rms,
-                    Vec::with_capacity(points_per_event),
-                ),
-                std::mem::replace(
-                    &mut self.output_right_rms,
-                    Vec::with_capacity(points_per_event),
-                ),
-                std::mem::replace(
-                    &mut self.output_left_up,
-                    Vec::with_capacity(points_per_event),
-                ),
-                std::mem::replace(
-                    &mut self.output_left_down,
-                    Vec::with_capacity(points_per_event),
-                ),
-                std::mem::replace(
-                    &mut self.output_right_up,
-                    Vec::with_capacity(points_per_event),
-                ),
-                std::mem::replace(
-                    &mut self.output_right_down,
-                    Vec::with_capacity(points_per_event),
-                ),
-                chunk_max_peak,
-                offset,
-            )?;
+        if self.output_left_rms.is_empty() {
+            return Ok(());
         }
-        Ok(())
+        self.write_batch_to_cache(job_id);
+        let offset = self.emitted_points - self.output_left_rms.len();
+        let chunk_max_peak = self.batch_max_peak;
+        self.batch_max_peak = 0;
+        let display_gain = compute_display_gain(self.max_left_peak.max(self.max_right_peak));
+        emit_batch(
+            app,
+            job_id,
+            track_index,
+            points_per_event,
+            std::mem::replace(
+                &mut self.output_left_rms,
+                Vec::with_capacity(points_per_event),
+            ),
+            std::mem::replace(
+                &mut self.output_right_rms,
+                Vec::with_capacity(points_per_event),
+            ),
+            std::mem::replace(
+                &mut self.output_left_up,
+                Vec::with_capacity(points_per_event),
+            ),
+            std::mem::replace(
+                &mut self.output_left_down,
+                Vec::with_capacity(points_per_event),
+            ),
+            std::mem::replace(
+                &mut self.output_right_up,
+                Vec::with_capacity(points_per_event),
+            ),
+            std::mem::replace(
+                &mut self.output_right_down,
+                Vec::with_capacity(points_per_event),
+            ),
+            chunk_max_peak,
+            offset,
+            display_gain,
+        )
     }
 
     fn finalize_bin(
@@ -392,7 +405,11 @@ impl WaveformState {
 
         self.current_count = 0;
 
-        self.flush_current_batch(app, job_id, track_index, points_per_event)
+        if self.output_left_rms.len() >= points_per_event {
+            self.drain_outputs(app, job_id, track_index, points_per_event)?;
+        }
+
+        Ok(())
     }
 }
 
@@ -416,111 +433,76 @@ pub async fn run_waveform_job(
         &request.video_path,
         request.track_index,
         target_rate,
-        points_per_event,
         quantized_duration,
     )?;
     let start_point = request
         .resume_from_point
         .unwrap_or(0)
         .min(TOTAL_WAVEFORM_POINTS);
-    let state = CacheState::open(&cache_path, start_point)?;
-    let cached_points = state.cached_points;
+    let cached_points = probe(&cache_path);
 
     let mut cached_max_left_peak: u8 = 0;
     let mut cached_max_right_peak: u8 = 0;
 
     if cached_points > 0 {
-        if let Ok(mut file) = File::open(&cache_path) {
-            if file.seek(SeekFrom::Start(CACHE_HEADER_SIZE)).is_ok() {
-                let point_size = POINT_SIZE as usize;
-                let mut scan = vec![0u8; (cached_points as usize).saturating_mul(point_size)];
-                if file.read_exact(&mut scan).is_ok() {
-                    let mut ptr = 0usize;
-                    while ptr + 5 < scan.len() {
-                        // Layout: rms_l, rms_r, up_l, down_l, up_r, down_r
-                        let up_l = scan[ptr + 2];
-                        let down_l = scan[ptr + 3];
-                        let up_r = scan[ptr + 4];
-                        let down_r = scan[ptr + 5];
-
-                        cached_max_left_peak = cached_max_left_peak.max(up_l).max(down_l);
-                        cached_max_right_peak = cached_max_right_peak.max(up_r).max(down_r);
-
-                        ptr += point_size;
-                    }
-                }
+        if let Ok(scan) = read_raw_points(&cache_path, 0, cached_points) {
+            for chunk in scan.chunks_exact(POINT_SIZE as usize) {
+                let (_rl, _rr, up_l, down_l, up_r, down_r) = decode_point(chunk);
+                cached_max_left_peak = cached_max_left_peak.max(up_l).max(down_l);
+                cached_max_right_peak = cached_max_right_peak.max(up_r).max(down_r);
             }
         }
     }
 
-    // Replay cached data
     if cached_points > start_point {
-        if let Ok(mut file) = File::open(&cache_path) {
-            let seek_pos = CACHE_HEADER_SIZE + (start_point as u64 * POINT_SIZE);
-            if file.seek(SeekFrom::Start(seek_pos)).is_ok() {
-                let points_to_emit = cached_points - start_point;
-                let mut data = vec![0u8; points_to_emit * POINT_SIZE as usize];
-                if file.read_exact(&mut data).is_ok() {
-                    let mut offset = start_point;
-                    let mut ptr = 0usize;
+        if let Ok(data) = read_raw_points(&cache_path, start_point, cached_points - start_point) {
+            log_info!(
+                job_id,
+                cached_points,
+                start_point,
+                points_to_replay = cached_points - start_point,
+                "Replaying cached waveform data"
+            );
 
-                    log_info!(
-                        job_id,
-                        cached_points,
-                        start_point,
-                        points_to_replay = cached_points - start_point,
-                        "Replaying cached waveform data"
-                    );
-
-                    while offset < cached_points {
-                        let count = (cached_points - offset).min(points_per_event);
-
-                        let mut l_rms = Vec::with_capacity(count);
-                        let mut r_rms = Vec::with_capacity(count);
-                        let mut l_up = Vec::with_capacity(count);
-                        let mut l_down = Vec::with_capacity(count);
-                        let mut r_up = Vec::with_capacity(count);
-                        let mut r_down = Vec::with_capacity(count);
-
-                        let mut chunk_max: u8 = 0;
-
-                        for _ in 0..count {
-                            let up_l = data[ptr + 2];
-                            let down_l = data[ptr + 3];
-                            let up_r = data[ptr + 4];
-                            let down_r = data[ptr + 5];
-
-                            l_rms.push(data[ptr]);
-                            r_rms.push(data[ptr + 1]);
-                            l_up.push(up_l);
-                            l_down.push(down_l);
-                            r_up.push(up_r);
-                            r_down.push(down_r);
-
-                            chunk_max = chunk_max.max(up_l).max(down_l).max(up_r).max(down_r);
-                            ptr += POINT_SIZE as usize;
-                        }
-                        let _ = emit_batch(
-                            app,
-                            job_id,
-                            request.track_index,
-                            points_per_event,
-                            l_rms,
-                            r_rms,
-                            l_up,
-                            l_down,
-                            r_up,
-                            r_down,
-                            chunk_max,
-                            offset,
-                        )
-                        .map_err(|e| {
-                            log_warn!(job_id, offset, error = %e, "Failed to emit cached waveform chunk")
-                        });
-
-                        offset += count;
-                    }
+            let mut offset = start_point;
+            let mut ptr = 0usize;
+            while offset < cached_points {
+                let count = (cached_points - offset).min(points_per_event);
+                let mut l_rms = Vec::with_capacity(count);
+                let mut r_rms = Vec::with_capacity(count);
+                let mut l_up = Vec::with_capacity(count);
+                let mut l_down = Vec::with_capacity(count);
+                let mut r_up = Vec::with_capacity(count);
+                let mut r_down = Vec::with_capacity(count);
+                let mut chunk_max: u8 = 0;
+                for _ in 0..count {
+                    let (rl, rr, up_l, down_l, up_r, down_r) =
+                        decode_point(&data[ptr..ptr + POINT_SIZE as usize]);
+                    l_rms.push(rl);
+                    r_rms.push(rr);
+                    l_up.push(up_l);
+                    l_down.push(down_l);
+                    r_up.push(up_r);
+                    r_down.push(down_r);
+                    chunk_max = chunk_max.max(up_l).max(down_l).max(up_r).max(down_r);
+                    ptr += POINT_SIZE as usize;
                 }
+                let chunk_gain =
+                    compute_display_gain(cached_max_left_peak.max(cached_max_right_peak));
+                let _ = emit_batch(
+                        app,
+                        job_id,
+                        request.track_index,
+                        points_per_event,
+                        l_rms, r_rms, l_up, l_down, r_up, r_down,
+                        chunk_max,
+                        offset,
+                        chunk_gain,
+                    )
+                    .map_err(|e| {
+                        log_warn!(job_id, offset, error = %e, "Failed to emit cached waveform chunk")
+                    });
+                offset += count;
             }
         }
     }
@@ -528,7 +510,6 @@ pub async fn run_waveform_job(
     if cached_points >= TOTAL_WAVEFORM_POINTS {
         let max_peak = cached_max_left_peak.max(cached_max_right_peak);
         let display_gain = compute_display_gain(max_peak);
-
         log_info!(
             job_id,
             cached_points,
@@ -538,7 +519,6 @@ pub async fn run_waveform_job(
             display_gain,
             "Fully cached; skipping FFmpeg decode"
         );
-
         let _ = app.emit(
             "waveform://finished",
             WaveformFinishedEvent {
@@ -555,18 +535,6 @@ pub async fn run_waveform_job(
         );
         return Ok(());
     }
-
-    let start_frame =
-        ((cached_points as f64 / TOTAL_WAVEFORM_POINTS as f64) * expected_frames as f64) as u64;
-    let mut waveform_state = WaveformState::new(
-        points_per_event,
-        cached_points,
-        state.cache_file,
-        start_frame,
-    );
-    waveform_state.max_left_peak = cached_max_left_peak;
-    waveform_state.max_right_peak = cached_max_right_peak;
-    let start_time = (cached_points as f64 / TOTAL_WAVEFORM_POINTS as f64) * quantized_duration;
 
     log_info!(
         job_id,
@@ -588,7 +556,19 @@ pub async fn run_waveform_job(
         "-sn",
         "-dn",
     ];
-    let start_time_arg = format!("{:.3}", start_time);
+
+    let start_frame =
+        ((cached_points as f64 / TOTAL_WAVEFORM_POINTS as f64) * expected_frames as f64) as u64;
+    let cache_file = open_writer(&cache_path);
+    let mut waveform_state =
+        WaveformState::new(points_per_event, cached_points, cache_file, start_frame);
+
+    waveform_state.max_left_peak = cached_max_left_peak;
+    waveform_state.max_right_peak = cached_max_right_peak;
+
+    let start_time = start_frame as f64 / target_rate as f64;
+
+    let start_time_arg = format!("{:.6}", start_time);
     let track_index_arg = format!("0:{}", request.track_index);
     let target_rate_arg = target_rate.to_string();
     if cached_points > 0 && cached_points < TOTAL_WAVEFORM_POINTS {
@@ -616,6 +596,7 @@ pub async fn run_waveform_job(
         .args(args)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
         .spawn()
         .map_err(|e| format!("Failed to start FFmpeg: {e}"))?;
 
@@ -646,37 +627,36 @@ pub async fn run_waveform_job(
     let mut reader = BufReader::with_capacity(READ_BUFFER_SIZE, stdout);
     let mut read_buffer = vec![0_u8; READ_BUFFER_SIZE];
     let mut pending = Vec::<u8>::with_capacity(READ_BUFFER_SIZE + BYTES_PER_FRAME);
-    let mut sample_buffer: Vec<f32> =
-        Vec::with_capacity((READ_BUFFER_SIZE + BYTES_PER_FRAME) / BYTES_PER_SAMPLE);
     let mut decoded_frames = 0_u64;
+
+    let mut completed = false;
 
     loop {
         tokio::select! {
             biased;
             _ = cancel_token.cancelled() => {
                 let _ = child.kill().await;
-
+                let _ = child.wait().await;
                 log_info!(job_id, "Waveform job cancelled by user");
-
                 return Err("Job cancelled by user".into());
             }
             read_result = reader.read(&mut read_buffer) => {
                 let bytes_read = match read_result {
                     Ok(n) => n,
-                    Err(error) => return Err(format!("Failed reading FFmpeg stdout: {error}")),
+                    Err(error) => {
+                        let _ = child.kill().await;
+                        let _ = child.wait().await;
+                        return Err(format!("Failed reading FFmpeg stdout: {error}"));
+                    }
                 };
-                if bytes_read == 0 {
-                    break;
-                }
+                if bytes_read == 0 { break; }
+
                 pending.extend_from_slice(&read_buffer[..bytes_read]);
                 let complete_bytes = pending.len() - (pending.len() % BYTES_PER_FRAME);
                 if complete_bytes > 0 {
-                    sample_buffer.clear();
-                    sample_buffer.extend_from_slice(
-                        bytemuck::cast_slice::<u8, f32>(&pending[..complete_bytes]),
-                    );
+                    let samples = bytemuck::cast_slice::<u8, f32>(&pending[..complete_bytes]);
                     waveform_state.process_run(
-                        &sample_buffer,
+                        samples,
                         expected_frames,
                         app,
                         job_id,
@@ -684,6 +664,11 @@ pub async fn run_waveform_job(
                         points_per_event,
                     )?;
                     decoded_frames += (complete_bytes / BYTES_PER_FRAME) as u64;
+                    if waveform_state.current_bin_index >= TOTAL_WAVEFORM_POINTS {
+                        completed = true;
+                        let _ = child.kill().await;
+                        break;
+                    }
                     let remainder = pending.len() - complete_bytes;
                     pending.copy_within(complete_bytes.., 0);
                     pending.truncate(remainder);
@@ -695,55 +680,15 @@ pub async fn run_waveform_job(
     if waveform_state.current_count > 0 {
         waveform_state.finalize_bin(app, job_id, request.track_index, points_per_event)?;
     }
-
-    if !waveform_state.output_left_rms.is_empty() {
-        waveform_state.write_batch_to_cache(job_id);
-        let offset = waveform_state.emitted_points - waveform_state.output_left_rms.len();
-        let chunk_max_peak = waveform_state.batch_max_peak;
-        waveform_state.batch_max_peak = 0;
-        emit_batch(
-            app,
-            job_id,
-            request.track_index,
-            waveform_state.output_left_rms.len(),
-            std::mem::replace(
-                &mut waveform_state.output_left_rms,
-                Vec::with_capacity(points_per_event),
-            ),
-            std::mem::replace(
-                &mut waveform_state.output_right_rms,
-                Vec::with_capacity(points_per_event),
-            ),
-            std::mem::replace(
-                &mut waveform_state.output_left_up,
-                Vec::with_capacity(points_per_event),
-            ),
-            std::mem::replace(
-                &mut waveform_state.output_left_down,
-                Vec::with_capacity(points_per_event),
-            ),
-            std::mem::replace(
-                &mut waveform_state.output_right_up,
-                Vec::with_capacity(points_per_event),
-            ),
-            std::mem::replace(
-                &mut waveform_state.output_right_down,
-                Vec::with_capacity(points_per_event),
-            ),
-            chunk_max_peak,
-            offset,
-        )?;
-    }
+    waveform_state.drain_outputs(app, job_id, request.track_index, points_per_event)?;
 
     let status = child
         .wait()
         .await
         .map_err(|e| format!("Failed waiting for FFmpeg: {e}"))?;
-    let stderr_message = stderr_task
-        .await
-        .unwrap_or_else(|e| format!("Failed joining stderr task: {e}"));
 
-    if !status.success() {
+    if !completed && !status.success() {
+        let stderr_message = stderr_task.await.unwrap_or_default();
         return Err(if stderr_message.is_empty() {
             format!("FFmpeg exited with status {status}")
         } else {
@@ -751,48 +696,25 @@ pub async fn run_waveform_job(
         });
     }
 
-    while waveform_state.current_bin_index < TOTAL_WAVEFORM_POINTS {
-        waveform_state.finalize_bin(app, job_id, request.track_index, points_per_event)?;
+    if !completed {
+        while waveform_state.current_bin_index < TOTAL_WAVEFORM_POINTS {
+            waveform_state.finalize_bin(app, job_id, request.track_index, points_per_event)?;
+        }
+        waveform_state.drain_outputs(app, job_id, request.track_index, points_per_event)?;
     }
 
-    if !waveform_state.output_left_rms.is_empty() {
-        waveform_state.write_batch_to_cache(job_id);
-        let offset = waveform_state.emitted_points - waveform_state.output_left_rms.len();
-
-        let chunk_max_peak = waveform_state.batch_max_peak;
-
-        emit_batch(
-            app,
-            job_id,
-            request.track_index,
-            waveform_state.output_left_rms.len(),
-            std::mem::replace(
-                &mut waveform_state.output_left_rms,
-                Vec::with_capacity(points_per_event),
-            ),
-            std::mem::replace(
-                &mut waveform_state.output_right_rms,
-                Vec::with_capacity(points_per_event),
-            ),
-            std::mem::replace(
-                &mut waveform_state.output_left_up,
-                Vec::with_capacity(points_per_event),
-            ),
-            std::mem::replace(
-                &mut waveform_state.output_left_down,
-                Vec::with_capacity(points_per_event),
-            ),
-            std::mem::replace(
-                &mut waveform_state.output_right_up,
-                Vec::with_capacity(points_per_event),
-            ),
-            std::mem::replace(
-                &mut waveform_state.output_right_down,
-                Vec::with_capacity(points_per_event),
-            ),
-            chunk_max_peak,
-            offset,
-        )?;
+    if cached_points > 0 {
+        let expected_remaining = expected_frames.saturating_sub(start_frame);
+        let drift = decoded_frames.abs_diff(expected_remaining);
+        if drift > expected_remaining.max(1) / 50 {
+            log_warn!(
+                job_id,
+                drift,
+                expected_remaining,
+                decoded_frames,
+                "Resume decode length deviates >2% from expectation"
+            );
+        }
     }
 
     let max_left_peak = waveform_state.max_left_peak;

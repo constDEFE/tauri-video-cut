@@ -66,10 +66,17 @@ type Actions = {
 		pointOffset: number,
 		arrays: WaveformChunkArrays,
 		totalPoints: number,
-		chunkMaxPeak?: number
+		chunkMaxPeak?: number,
+		displayGain?: number // NEW
 	) => void;
 	clearTrack: (trackIndex: number) => void;
-	setCachedData: (trackIndex: number, jobId: string, data: RawTrackData, totalPoints: number) => void;
+	setCachedData: (
+		trackIndex: number,
+		jobId: string,
+		data: RawTrackData,
+		totalPoints: number,
+		displayGain?: number
+	) => void;
 	setFinished: (
 		trackIndex: number,
 		jobId: string,
@@ -200,7 +207,7 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
 
 			set({ state: { waveformUpdateCounter: store.state.waveformUpdateCounter + 1 } });
 		},
-		appendChunk: (trackIndex, jobId, pointOffset, arrays, totalPoints, chunkMaxPeak) => {
+		appendChunk: (trackIndex, jobId, pointOffset, arrays, totalPoints, chunkMaxPeak, displayGain) => {
 			const store = get();
 			let track = store.private._tracks.get(trackIndex);
 
@@ -245,14 +252,14 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
 				...track,
 				filledPoints,
 				maxPeak,
-				displayGain: computeDisplayGain(maxPeak)
+				displayGain: typeof displayGain === "number" && displayGain > 0 ? displayGain : track.displayGain
 			});
 
 			store.private._emittedPoints.set(trackIndex, filledPoints);
 
 			set({ state: { waveformUpdateCounter: store.state.waveformUpdateCounter + 1 } });
 		},
-		setCachedData: (trackIndex, jobId, data, totalPoints) => {
+		setCachedData: (trackIndex, jobId, data, totalPoints, displayGain) => {
 			const store = get();
 			const track = store.private._tracks.get(trackIndex);
 
@@ -271,7 +278,7 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
 				finished: true,
 				error: null,
 				maxPeak,
-				displayGain: computeDisplayGain(maxPeak)
+				displayGain: typeof displayGain === "number" && displayGain > 0 ? displayGain : computeDisplayGain(maxPeak)
 			});
 
 			set({ state: { waveformUpdateCounter: store.state.waveformUpdateCounter + 1 } });
@@ -287,13 +294,11 @@ export const useWaveformStore = create<WaveformStore>((set, get) => ({
 			const backendMaxPeak = Math.max(maxLeftPeak ?? 0, maxRightPeak ?? 0);
 			const maxPeak = Math.max(track.maxPeak ?? 0, backendMaxPeak);
 
-			const displayGain = maxPeak > 0 ? computeDisplayGain(maxPeak) : (backendDisplayGain ?? 1);
-
 			store.private._tracks.set(trackIndex, {
 				...track,
 				finished: true,
 				maxPeak,
-				displayGain
+				displayGain: backendDisplayGain ?? track.displayGain
 			});
 
 			set({ state: { waveformUpdateCounter: store.state.waveformUpdateCounter + 1 } });
