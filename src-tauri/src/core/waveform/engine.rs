@@ -17,12 +17,14 @@ use crate::core::waveform::model::{
 };
 use crate::logger::{log_error, log_info, log_warn};
 
-pub const BYTES_PER_SAMPLE: usize = 4;
+pub const BYTES_PER_SAMPLE: usize = 2;
 pub const BYTES_PER_FRAME: usize = 2 * BYTES_PER_SAMPLE;
 const READ_BUFFER_SIZE: usize = 1024 * 1024;
 
 const DISPLAY_TARGET_AMP: f64 = 0.9 * 255.0;
 const DISPLAY_MAX_GAIN: f64 = 4.0;
+
+const S16_TO_F32: f32 = 1.0 / 32768.0;
 
 pub fn compute_display_gain(max_peak: u8) -> f32 {
     if max_peak == 0 {
@@ -159,9 +161,9 @@ pub struct WaveformState {
 }
 
 #[inline]
-fn reduce_interleaved(samples: &[f32]) -> (f32, f32, f32, f32, f32, f32) {
-    let mut left_sq = 0.0f32;
-    let mut right_sq = 0.0f32;
+fn reduce_interleaved_s16(raw: &[u8]) -> (f64, f64, f32, f32, f32, f32) {
+    let mut left_sq = 0.0f64;
+    let mut right_sq = 0.0f64;
 
     let mut left_min = 0.0f32;
     let mut left_max = 0.0f32;
@@ -169,12 +171,18 @@ fn reduce_interleaved(samples: &[f32]) -> (f32, f32, f32, f32, f32, f32) {
     let mut right_min = 0.0f32;
     let mut right_max = 0.0f32;
 
-    for pair in samples.chunks_exact(2) {
-        let l = pair[0];
-        let r = pair[1];
+    for frame in raw.chunks_exact(BYTES_PER_FRAME) {
+        let l_i16 = i16::from_le_bytes([frame[0], frame[1]]);
+        let r_i16 = i16::from_le_bytes([frame[2], frame[3]]);
 
-        left_sq += l * l;
-        right_sq += r * r;
+        let l = l_i16 as f32 * S16_TO_F32;
+        let r = r_i16 as f32 * S16_TO_F32;
+
+        let l64 = f64::from(l);
+        let r64 = f64::from(r);
+
+        left_sq += l64 * l64;
+        right_sq += r64 * r64;
 
         left_min = left_min.min(l);
         left_max = left_max.max(l);
@@ -226,7 +234,7 @@ impl WaveformState {
 
     fn process_run(
         &mut self,
-        samples: &[f32],
+        raw: &[u8],
         expected_frames: u64,
         app: &AppHandle,
         job_id: &str,
@@ -234,7 +242,8 @@ impl WaveformState {
         points_per_event: usize,
     ) -> Result<(), String> {
         let total_points = TOTAL_WAVEFORM_POINTS as u64;
-        let frame_count = samples.len() / 2;
+        let frame_count = raw.len() / BYTES_PER_FRAME;
+
         let mut offset = 0usize;
 
         while offset < frame_count {
@@ -247,12 +256,17 @@ impl WaveformState {
                 self.finalize_bin(app, job_id, track_index, points_per_event)?;
                 continue;
             }
-            let run_len = ((bin_end_frame - self.frame_cursor) as usize).min(frame_count - offset);
-            let (left_sq, right_sq, left_min, left_max, right_min, right_max) =
-                reduce_interleaved(&samples[offset * 2..(offset + run_len) * 2]);
 
-            self.current_left_sq += f64::from(left_sq);
-            self.current_right_sq += f64::from(right_sq);
+            let run_len = ((bin_end_frame - self.frame_cursor) as usize).min(frame_count - offset);
+
+            let start_byte = offset * BYTES_PER_FRAME;
+            let end_byte = (offset + run_len) * BYTES_PER_FRAME;
+
+            let (left_sq, right_sq, left_min, left_max, right_min, right_max) =
+                reduce_interleaved_s16(&raw[start_byte..end_byte]);
+
+            self.current_left_sq += left_sq;
+            self.current_right_sq += right_sq;
 
             self.current_left_min = self.current_left_min.min(left_min);
             self.current_left_max = self.current_left_max.max(left_max);
@@ -262,8 +276,10 @@ impl WaveformState {
 
             self.current_count += run_len as u64;
             self.frame_cursor += run_len as u64;
+
             offset += run_len;
         }
+
         Ok(())
     }
 
@@ -584,11 +600,11 @@ pub async fn run_waveform_job(
         "-ar",
         &target_rate_arg,
         "-sample_fmt",
-        "flt",
+        "s16",
         "-c:a",
-        "pcm_f32le",
+        "pcm_s16le",
         "-f",
-        "f32le",
+        "s16le",
         "-",
     ]);
 
@@ -654,9 +670,8 @@ pub async fn run_waveform_job(
                 pending.extend_from_slice(&read_buffer[..bytes_read]);
                 let complete_bytes = pending.len() - (pending.len() % BYTES_PER_FRAME);
                 if complete_bytes > 0 {
-                    let samples = bytemuck::cast_slice::<u8, f32>(&pending[..complete_bytes]);
                     waveform_state.process_run(
-                        samples,
+                        &pending[..complete_bytes],
                         expected_frames,
                         app,
                         job_id,
