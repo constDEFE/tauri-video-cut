@@ -8,7 +8,7 @@ repository = "https://github.com/constDEFE/tauri-video-cut"
 homepage = "https://github.com/constDEFE/tauri-video-cut"
 keywords = ["video", "cut", "lossless", "tauri", "windows", "gui"]
 categories = ["multimedia::video", "rendering", "gui"]
-rust-version = "1.85"
+rust-version = "1.97.1"
 
 [lib]
 name = "tauri_video_cut_lib"
