@@ -1,2 +1,3 @@
 export * from "./use-app-config";
-export * from "./persist-theme";
+export * from "./setup-theme-listeners";
+export * from "./setup-zoom-listeners";

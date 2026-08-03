@@ -8,5 +8,6 @@ declare global {
 	interface WindowEventMap {
 		configUpdate: CustomEvent<AppConfig>;
 		themeUpdate: CustomEvent<AppConfig["theme"]>;
+		zoomUpdate: CustomEvent<AppConfig["zoomScale"]>;
 	}
 }

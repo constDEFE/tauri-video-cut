@@ -19,12 +19,21 @@ export const CANVAS_THEME = {
 	}
 } as const;
 
-type Column = {
-	i0: number;
-	i1: number;
+const U8_MAX = 255;
+const NOISE_GATE_THRESHOLD = 2;
+const RMS_VISUAL_SCALE = 0.8;
+const PEAK_FILL_ALPHA = 0.33;
+const CURSOR_LINE_WIDTH = 1.5;
+const SEGMENT_BORDER_WIDTH = 1;
+const MIN_WAVEFORM_COLUMNS = 2;
+const WAVEFORM_COLUMN_DENSITY = 2; // columns per CSS pixel
+
+type ThemeColors = (typeof CANVAS_THEME)[keyof typeof CANVAS_THEME];
+
+type WaveformColumn = {
 	x: number;
-	up: number;
-	down: number;
+	peakUp: number;
+	peakDown: number;
 	rms: number;
 };
 
@@ -38,55 +47,86 @@ export type BaseDrawOptions = {
 	totalPoints?: number | undefined;
 };
 
-const U8_NORMALIZE = 1 / 255.0;
-
-const WAVEFORM_NOISE_GATE = 2;
-const RMS_VISUAL_SCALE = 0.8;
-
-const buildColumns = (
-	count: number,
-	width: number,
-	totalPoints: number,
+const aggregateWaveformColumns = (
 	upSamples: Uint8Array,
 	downSamples: Uint8Array,
-	rmsSamples: Uint8Array | undefined
-): Column[] => {
-	const stepX = width / (totalPoints - 1);
-	const needsAggregation = count > Math.max(2, Math.floor(width * 2));
-	const cols = needsAggregation ? Math.max(2, Math.floor(width * 2)) : count;
-	const out: Column[] = [];
-	for (let c = 0; c < cols; c++) {
-		const i0 = needsAggregation ? Math.floor((c * count) / cols) : c;
-		const i1 = needsAggregation ? Math.max(i0 + 1, Math.floor(((c + 1) * count) / cols)) : i0 + 1;
+	rmsSamples: Uint8Array | undefined,
+	width: number,
+	totalPoints: number
+): WaveformColumn[] => {
+	const sampleCount = upSamples.length;
+	if (sampleCount === 0 || totalPoints <= 1 || width <= 0) return [];
 
-		let up = 0;
-		let down = 0;
+	const stepX = width / (totalPoints - 1);
+	const maxColumns = Math.max(MIN_WAVEFORM_COLUMNS, Math.floor(width * WAVEFORM_COLUMN_DENSITY));
+	const needsAggregation = sampleCount > maxColumns;
+	const columnCount = needsAggregation ? maxColumns : sampleCount;
+
+	const columns: WaveformColumn[] = [];
+
+	for (let c = 0; c < columnCount; c++) {
+		const i0 = needsAggregation ? Math.floor((c * sampleCount) / columnCount) : c;
+		const i1 = needsAggregation ? Math.max(i0 + 1, Math.floor(((c + 1) * sampleCount) / columnCount)) : i0 + 1;
+
+		let peakUp = 0;
+		let peakDown = 0;
 		let rms = 0;
+
 		for (let i = i0; i < i1; i++) {
 			const u = upSamples[i] ?? 0;
 			const d = downSamples[i] ?? 0;
-			if (u > up) up = u;
-			if (d > down) down = d;
+			if (u > peakUp) peakUp = u;
+			if (d > peakDown) peakDown = d;
 			if (rmsSamples) {
 				const r = rmsSamples[i] ?? 0;
 				if (r > rms) rms = r;
 			}
 		}
+
 		const midIndex = (i0 + i1 - 1) / 2;
-		out.push({ i0, i1, x: midIndex * stepX, up, down, rms });
+		columns.push({ x: midIndex * stepX, peakUp, peakDown, rms });
 	}
 
-	return out;
+	return columns;
 };
 
-const drawVerticalLine = (ctx: CanvasRenderingContext2D, x: number, height: number) => {
-	ctx.beginPath();
-	ctx.moveTo(x, 0);
-	ctx.lineTo(x, height);
-	ctx.stroke();
+const computePeakAmp = (col: WaveformColumn, gain: number): number => {
+	const raw = Math.max(col.peakUp, col.peakDown);
+	if (raw <= NOISE_GATE_THRESHOLD) return 0;
+	return Math.min(1, (raw / U8_MAX) * gain);
 };
 
-const drawWaveformSideHybrid = (
+const computeRmsAmp = (col: WaveformColumn, gain: number, peakAmp: number): number => {
+	if (col.rms <= NOISE_GATE_THRESHOLD) return 0;
+	const scaled = Math.min(1, (col.rms / U8_MAX) * gain * RMS_VISUAL_SCALE);
+	return Math.min(scaled, peakAmp);
+};
+
+const buildWaveformPath = (
+	columns: WaveformColumn[],
+	centerY: number,
+	waveHeight: number,
+	direction: number,
+	amplitudeFn: (col: WaveformColumn) => number
+): Path2D => {
+	const path = new Path2D();
+	if (columns.length === 0) return path;
+
+	columns.forEach((col, index) => {
+		const y = centerY + direction * amplitudeFn(col) * waveHeight;
+		if (index === 0) path.moveTo(col.x, y);
+		else path.lineTo(col.x, y);
+	});
+
+	const last = columns[columns.length - 1]!;
+	path.lineTo(last.x, centerY);
+	path.lineTo(columns[0]!.x, centerY);
+	path.closePath();
+
+	return path;
+};
+
+const drawWaveformSide = (
 	ctx: CanvasRenderingContext2D,
 	upSamples: Uint8Array,
 	downSamples: Uint8Array,
@@ -95,63 +135,26 @@ const drawWaveformSideHybrid = (
 	centerY: number,
 	waveHeight: number,
 	isTop: boolean,
-	colors: (typeof CANVAS_THEME)[keyof typeof CANVAS_THEME],
+	colors: ThemeColors,
 	totalPoints: number,
 	gain: number
 ) => {
-	const count = upSamples.length;
-	if (count === 0 || totalPoints <= 1 || width <= 0) return;
+	const columns = aggregateWaveformColumns(upSamples, downSamples, rmsSamples, width, totalPoints);
+	if (columns.length === 0) return;
 
-	const columns = buildColumns(count, width, totalPoints, upSamples, downSamples, rmsSamples);
 	const direction = isTop ? -1 : 1;
 
-	const peakAmp = (col: Column) => {
-		const raw = Math.max(col.up, col.down);
-		if (raw <= WAVEFORM_NOISE_GATE) return 0;
-		return Math.min(1, raw * U8_NORMALIZE * gain);
-	};
-
-	const rmsAmp = (col: Column) => {
-		if (!rmsSamples) return 0;
-		if (col.rms <= WAVEFORM_NOISE_GATE) return 0;
-		let a = Math.min(1, col.rms * U8_NORMALIZE * gain * RMS_VISUAL_SCALE);
-		const p = peakAmp(col);
-		if (a > p) a = p;
-		return a;
-	};
-
-	const peakPath = new Path2D();
-
-	columns.forEach((col, n) => {
-		const y = centerY + direction * peakAmp(col) * waveHeight;
-		if (n === 0) peakPath.moveTo(col.x, y);
-		else peakPath.lineTo(col.x, y);
-	});
-
-	const last = columns[columns.length - 1];
-
-	peakPath.lineTo(last!.x, centerY);
-	peakPath.lineTo(columns[0]!.x, centerY);
-	peakPath.closePath();
-
+	const peakPath = buildWaveformPath(columns, centerY, waveHeight, direction, (col) => computePeakAmp(col, gain));
 	ctx.save();
 	ctx.fillStyle = colors.waveform;
-	ctx.globalAlpha = 0.33;
+	ctx.globalAlpha = PEAK_FILL_ALPHA;
 	ctx.fill(peakPath);
 	ctx.restore();
 
 	if (rmsSamples?.length) {
-		const rmsPath = new Path2D();
-
-		columns.forEach((col, n) => {
-			const y = centerY + direction * rmsAmp(col) * waveHeight;
-			if (n === 0) rmsPath.moveTo(col.x, y);
-			else rmsPath.lineTo(col.x, y);
-		});
-
-		rmsPath.lineTo(last!.x, centerY);
-		rmsPath.lineTo(columns[0]!.x, centerY);
-		rmsPath.closePath();
+		const rmsPath = buildWaveformPath(columns, centerY, waveHeight, direction, (col) =>
+			computeRmsAmp(col, gain, computePeakAmp(col, gain))
+		);
 		ctx.fillStyle = colors.waveform;
 		ctx.fill(rmsPath);
 	}
@@ -161,26 +164,26 @@ const drawWaveformSideHybrid = (
 	ctx.stroke(peakPath);
 };
 
+const hasValidWaveformData = (wf: AudioWaveform): boolean => !!(wf.leftUp?.length && wf.leftDown?.length);
+
 const drawWaveform = (
 	ctx: CanvasRenderingContext2D,
 	waveform: AudioWaveform,
 	width: number,
 	height: number,
-	colors: (typeof CANVAS_THEME)[keyof typeof CANVAS_THEME],
+	colors: ThemeColors,
 	totalPoints: number
 ) => {
-	if (!waveform.leftUp?.length || !waveform.leftDown?.length) return;
+	if (!hasValidWaveformData(waveform)) return;
 
 	const centerY = height / 2;
 	const waveHeight = Math.max(1, height / 2 - 1);
-
 	const gain = typeof waveform.displayGain === "number" && waveform.displayGain > 0 ? waveform.displayGain : 1;
 
-	// Top half: left channel (upward from center)
-	drawWaveformSideHybrid(
+	drawWaveformSide(
 		ctx,
-		waveform.leftUp,
-		waveform.leftDown,
+		waveform.leftUp!,
+		waveform.leftDown!,
 		waveform.rmsLeft,
 		width,
 		centerY,
@@ -191,9 +194,8 @@ const drawWaveform = (
 		gain
 	);
 
-	// Bottom half: right channel (downward from center)
 	if (waveform.rightUp?.length && waveform.rightDown?.length) {
-		drawWaveformSideHybrid(
+		drawWaveformSide(
 			ctx,
 			waveform.rightUp,
 			waveform.rightDown,
@@ -209,6 +211,34 @@ const drawWaveform = (
 	}
 };
 
+const drawSelectedSegment = (
+	ctx: CanvasRenderingContext2D,
+	segment: { start: number; duration: number },
+	pixelsPerSecond: number,
+	height: number,
+	colors: ThemeColors
+) => {
+	const startX = segment.start * pixelsPerSecond;
+	const segmentWidth = segment.duration * pixelsPerSecond;
+
+	ctx.fillStyle = colors.segmentArea;
+	ctx.fillRect(startX, 0, segmentWidth, height);
+
+	ctx.strokeStyle = colors.segmentBorder;
+	ctx.lineWidth = SEGMENT_BORDER_WIDTH;
+	ctx.lineCap = "round";
+
+	ctx.beginPath();
+	ctx.moveTo(startX, 0);
+	ctx.lineTo(startX, height);
+	ctx.stroke();
+
+	ctx.beginPath();
+	ctx.moveTo(startX + segmentWidth, 0);
+	ctx.lineTo(startX + segmentWidth, height);
+	ctx.stroke();
+};
+
 export const drawTimelineBase = (ctx: CanvasRenderingContext2D, options: BaseDrawOptions) => {
 	const { width, height, duration, selectedSegment, theme, waveform, totalPoints } = options;
 	const colors = CANVAS_THEME[theme];
@@ -222,15 +252,7 @@ export const drawTimelineBase = (ctx: CanvasRenderingContext2D, options: BaseDra
 	const pixelsPerSecond = width / duration;
 
 	if (selectedSegment) {
-		const startX = selectedSegment.start * pixelsPerSecond;
-		const segmentWidth = selectedSegment.duration * pixelsPerSecond;
-		ctx.fillStyle = colors.segmentArea;
-		ctx.fillRect(startX, 0, segmentWidth, height);
-		ctx.strokeStyle = colors.segmentBorder;
-		ctx.lineWidth = 1;
-		ctx.lineCap = "round";
-		drawVerticalLine(ctx, startX, height);
-		drawVerticalLine(ctx, startX + segmentWidth, height);
+		drawSelectedSegment(ctx, selectedSegment, pixelsPerSecond, height, colors);
 	}
 
 	if (waveform && totalPoints) {
@@ -250,7 +272,7 @@ export const drawCursorOverlay = (
 
 	ctx.save();
 	ctx.strokeStyle = colors.cursor;
-	ctx.lineWidth = 1.5;
+	ctx.lineWidth = CURSOR_LINE_WIDTH;
 	ctx.beginPath();
 	ctx.moveTo(x, 0);
 	ctx.lineTo(x, height);
@@ -258,7 +280,7 @@ export const drawCursorOverlay = (
 	ctx.restore();
 };
 
-export const newCursor = (offsetX: number, canvas: HTMLCanvasElement, duration: number) => {
+export const newCursor = (offsetX: number, canvas: HTMLCanvasElement, duration: number): number => {
 	const rect = canvas.getBoundingClientRect();
 	if (rect.width <= 0 || duration <= 0) return 0;
 	const position = ((offsetX - rect.left) / rect.width) * duration;

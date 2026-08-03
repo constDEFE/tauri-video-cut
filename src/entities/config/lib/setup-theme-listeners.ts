@@ -5,7 +5,7 @@ const handler = (e: Event) => {
 	invoke("set_app_config_var", { key: "theme", value: theme }).catch(console.error);
 };
 
-export const persistTheme = () => {
+export const setupThemeListeners = () => {
 	window.addEventListener("themeUpdate", handler);
 	return () => window.removeEventListener("themeUpdate", handler);
 };

@@ -10,7 +10,7 @@ const subscribe = (cb: () => void) => {
 
 const getSnap = () => window.__CONFIG__.theme;
 
-export const useTheme = () => {
+export const useAppTheme = () => {
 	const theme = useSyncExternalStore(subscribe, getSnap);
 
 	const toggleTheme = useCallback(() => {

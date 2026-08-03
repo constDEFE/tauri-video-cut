@@ -49,7 +49,7 @@ export const Timeline = () => {
 				class="border-secondary relative h-10 w-full cursor-pointer overflow-hidden rounded-lg border opacity-0 duration-100 ease-out group-hover:opacity-100"
 				{...handlers}
 			>
-				<canvas ref={baseCanvasRef} class="absolute inset-0 h-full w-full" />
+				<canvas ref={baseCanvasRef} class="absolute inset-0 h-full w-full rounded-md" />
 				<canvas ref={cursorCanvasRef} class="pointer-events-none absolute inset-0 h-full w-full" />
 			</div>
 		</div>

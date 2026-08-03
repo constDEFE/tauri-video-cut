@@ -1,4 +1,4 @@
-import { useTheme } from "@/shared/lib/theme";
+import { useAppTheme } from "@/shared/lib/theme";
 import { MoonIcon, SunIcon } from "@/shared/ui/icons";
 
 type Props = {
@@ -7,7 +7,7 @@ type Props = {
 };
 
 export const ThemeSwitch = ({ class: cn, iconClass }: Props) => {
-	const { theme, toggleTheme } = useTheme();
+	const { theme, toggleTheme } = useAppTheme();
 
 	const isDarkTheme = theme === "dark";
 
