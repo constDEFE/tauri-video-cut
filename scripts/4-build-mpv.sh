@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-echo "=== [4/5] Compiling Custom FFmpeg & mpv Player ==="
+echo "=== [4/5] Compiling Custom mpv Player ==="
 
 if [ "$MSYSTEM" != "UCRT64" ]; then
   echo "ERROR: This script must be run inside an MSYS2 UCRT64 terminal shell"
@@ -54,14 +54,12 @@ meson setup "$MPV_TEMP_DIR" \
   \
   -Dlua=disabled \
   -Djavascript=disabled \
-  -Dlibcurl=disabled \
   -Dlibarchive=disabled \
   -Diconv=disabled \
   -Duchardet=disabled \
   -Djpeg=disabled \
   -Dlcms2=disabled \
   -Dzimg=disabled \
-  -Dsubrandr=disabled \
   -Dcplugins=disabled \
   -Ddvbin=disabled \
   -Dcdda=disabled \

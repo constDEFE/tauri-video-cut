@@ -47,10 +47,7 @@ if [ $CURL_STATUS -ne 0 ]; then
   echo "Please download and stage it manually:"
   echo "1. Open this URL in your web browser:"
   echo "   ${WRAPPER_URL}"
-  echo "2. Open the downloaded .zip file."
-  echo "3. Extract or copy 'libmpv-wrapper.dll' into one of these directories:"
-  echo "   ${STAGE_MPV_WRAPPER_DIR}"
-  echo "   ${OUTPUT_DIR}"
+  echo "2. Extract 'libmpv-wrapper.dll' into: ${STAGE_MPV_WRAPPER_DIR}"
   echo "========================================================================="
   echo ""
 
@@ -68,19 +65,9 @@ else
   rm -f "$STAGE_MPV_WRAPPER_DIR/libmpv-wrapper.zip"
 
   if [ $UNZIP_STATUS -ne 0 ]; then
-    echo "========================================================================="
-    echo "  WARNING: Extraction of the wrapper archive failed"
-    echo "========================================================================="
-    echo "Extract 'libmpv-wrapper.dll' manually from your downloads and"
-    echo "place it inside one of these directories:"
-    echo "  ${STAGE_MPV_WRAPPER_DIR}"
-    echo "  ${OUTPUT_DIR}"
-    echo "========================================================================="
-
+    echo "WARNING: Extraction failed. Place libmpv-wrapper.dll manually."
     if [ -t 0 ]; then
       read -p "Press [ENTER] once you have manually placed 'libmpv-wrapper.dll'..."
-    else
-      echo "Non-interactive shell detected. Continuing to verification..."
     fi
   fi
 fi
@@ -88,47 +75,30 @@ fi
 find "$STAGE_MPV_WRAPPER_DIR" -type f -name "libmpv-wrapper.dll" -exec cp -f {} "$OUTPUT_DIR/" \;
 
 if [ ! -f "$OUTPUT_DIR/libmpv-wrapper.dll" ]; then
-  echo "ERROR: 'libmpv-wrapper.dll' could not be found or verified in the target directory"
-  echo "Aborting script execution."
+  echo "ERROR: 'libmpv-wrapper.dll' could not be found or verified"
   exit 1
 fi
 echo "Successfully verified libmpv-wrapper link layer."
 
 REQUIRED_DLLS=(
-  "avcodec"
-  "avfilter"
-  "avformat"
-  "avutil"
-  "libass"
-  "libbrotlicommon"
-  "libbrotlidec"
-  "libdav1d"
-  "libdovi"
-  "libexpat"
-  "libfontconfig"
-  "libfreetype"
-  "libfribidi"
-  "libgcc_s_seh"
-  "libglib"
-  "libgraphite2"
-  "libharfbuzz-0"
-  "libintl"
-  "libpcre2-8"
-  "libplacebo"
-  "libpng"
-  "libshaderc_shared"
-  "libspirv-cross-c-shared"
-  "libstdc++"
-  "libSvtAv1Enc"
-  "libunibreak"
-  "libvpx"
-  "libwinpthread"
-  "libx264"
-  "libx265"
-  "libzimg"
-  "swresample"
-  "swscale"
-  "zlib"
+  # FFmpeg core libraries
+  "avcodec" "avdevice" "avfilter" "avformat"
+  "avutil" "swresample" "swscale"
+  # FFmpeg codec dependencies
+  "libdav1d" "libSvtAv1Enc" "libvpx" "libx264" "libx265"
+  # FFmpeg system deps
+  "zlib" "libbz2"
+  # mpv/libass rendering dependencies
+  "libass" "libfontconfig" "libfreetype"
+  "libfribidi" "libharfbuzz-" "liblcms2-"
+  "libpcre2-" "libplacebo" "libpng" "libbrotlicommon"
+  "libbrotlidec" "libunibreak" "libglib" "libgraphite2"
+  "libdovi" "libexpat" "libintl" "libiconv" "libcaca"
+  "libopenal"
+  # D3D11 shader pipeline (REQUIRED by meson.build for d3d11 vo)
+  "libshaderc_shared" "libspirv-cross-c-shared"
+  # UCRT/GCC runtime
+  "libgcc_s_seh" "libstdc++" "libwinpthread"
 )
 
 copy_dll_matches() {
@@ -153,25 +123,21 @@ copy_dll_matches() {
 
 echo "Locating and gathering UCRT64 runtime dependencies..."
 
-for dll_base in "${REQUIRED_DLLS[@]}"; do
+ for dll_base in "${REQUIRED_DLLS[@]}"; do
   if copy_dll_matches "$STAGE_FF_DIR" "${dll_base}*.dll" "ffmpeg-dist exact"; then
     continue
   fi
-
   if copy_dll_matches "$UCRT_BIN_DIR" "${dll_base}*.dll" "ucrt64 exact"; then
     continue
   fi
-
-  if copy_dll_matches "$UCRT_BIN_DIR" "*${dll_base}*.dll" "ucrt64 alt"; then
-    continue
-  fi
-
   if copy_dll_matches "$STAGE_FF_DIR" "*${dll_base}*.dll" "ffmpeg-dist alt"; then
     continue
   fi
-
+	if copy_dll_matches "$UCRT_BIN_DIR" "*${dll_base}*.dll" "ucrt64 alt"; then
+	  continue
+	fi
   echo "WARNING: Could not resolve dependency mapping target for element: ${dll_base}"
-done
+ done
 
 echo "--------------------------------------------------------"
 echo "SUCCESS: Everything is gathered and ready for deployment."

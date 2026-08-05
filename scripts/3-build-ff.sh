@@ -29,7 +29,7 @@ make distclean || true
 echo "Setting up local environment variables for Nvidia dependencies..."
 export PKG_CONFIG_PATH="${FFMPEG_BUILD_DIR}/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
 
-# `--cpu=x86-64-v3`
+# `--cpu=x86-64-v3` AND `--enable-lto`
 # AVX2 support. Better performance on modern CPUs,
 # on older (~2015) will instantly crash.
 # Use with `--disable-runtime-cpudetect`
@@ -37,7 +37,6 @@ echo "Executing custom lean feature configuration..."
 
 ./configure \
   --extra-cflags="-I${FFMPEG_BUILD_DIR}/include -O3 -pipe" \
-  --extra-ldflags="-flto" \
   --prefix="${FFMPEG_BUILD_DIR}" \
   --enable-shared \
   --disable-static \
@@ -53,9 +52,11 @@ echo "Executing custom lean feature configuration..."
   --disable-lsp \
   --disable-pixelutils \
   --disable-iamf \
-  --disable-postproc \
+  --disable-swscale-alpha \
   --cpu=x86-64-v3 \
   --disable-runtime-cpudetect \
+  --enable-lto \
+  --enable-pic \
   \
   --enable-ffmpeg \
   --enable-ffprobe \
@@ -71,6 +72,7 @@ echo "Executing custom lean feature configuration..."
   --enable-ffnvcodec \
   --enable-nvenc \
   \
+  --enable-hardcoded-tables \
   --enable-gpl \
   --enable-libx264 \
   --enable-libx265 \
@@ -82,7 +84,7 @@ echo "Executing custom lean feature configuration..."
   --enable-encoder=libx264,libx265,libsvtav1,libvpx_vp9,av1_nvenc,h264_nvenc,hevc_nvenc,pcm_s16le,pcm_s24le,pcm_s32le,pcm_f32le,aac,opus \
   --enable-parser=av1,h264,hevc,aac,mjpeg,vp9,opus,mpeg4,ac3,mpegaudio,flac,vorbis,mpegvideo \
   --enable-demuxer=mov,matroska,avi,mpegts,flv,ogg,wav,concat,pcm_s8,pcm_s16le \
-  --enable-muxer=mp4,matroska,webm,avi,mov,pcm_s8,pcm_s16le,pcm_f32le \
+  --enable-muxer=mp4,matroska,webm,avi,mov,pcm_s8,pcm_s16le \
   --enable-protocol=file,pipe \
   --enable-filter=trim,atrim,setpts,asetpts,format,aformat,aresample,null,anull \
   --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc,av1_frame_merge,extract_extradata,vp9_superframe,vp9_superframe_split,mpeg4_unpack_bframes,aac_adtstoasc,opus_metadata \

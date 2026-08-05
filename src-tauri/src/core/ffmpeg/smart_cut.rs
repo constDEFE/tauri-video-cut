@@ -453,6 +453,8 @@ fn add_encoder_params(args: &mut Vec<String>, encoder: &str) {
         "h264_nvenc" | "hevc_nvenc" | "av1_nvenc" => args.extend([
             "-preset".to_string(),
             "p4".to_string(),
+            "-rc".to_string(),
+            "vbr".to_string(),
             "-cq".to_string(),
             DEFAULT_X264_QP.to_string(),
         ]),
@@ -469,7 +471,7 @@ fn add_encoder_params(args: &mut Vec<String>, encoder: &str) {
         "libsvtav1" => args.extend([
             "-preset".to_string(),
             DEFAULT_SVT_AV1_PRESET.to_string(),
-            "-qp".to_string(),
+            "-crf".to_string(),
             DEFAULT_SVT_AV1_QP.to_string(),
         ]),
         "libvpx-vp9" => args.extend([
