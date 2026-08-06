@@ -4,8 +4,8 @@ set -e
 echo "=== [1/5] Initializing MSYS2 UCRT64 Environment ==="
 
 if [ "$MSYSTEM" != "UCRT64" ]; then
-    echo "ERROR: This script must be run inside an MSYS2 UCRT64 terminal shell!"
-    exit 1
+  echo "ERROR: This script must be run inside an MSYS2 UCRT64 terminal shell!"
+  exit 1
 fi
 
 echo "Updating system and installing all build dependencies..."
@@ -61,24 +61,24 @@ pacman -Syu --needed --noconfirm \
 WORKSPACE_DIR=$(pwd)
 
 if [ ! -d "$WORKSPACE_DIR/ffmpeg-source" ]; then
-    echo "Cloning stable FFmpeg release branch (n9.0.1)..."
-    git clone -b "n9.0.1" --single-branch https://github.com/FFmpeg/FFmpeg.git "$WORKSPACE_DIR/ffmpeg-source"
+  echo "Cloning stable FFmpeg release branch (n9.0.1)..."
+  git clone -b "n9.0.1" --single-branch https://github.com/FFmpeg/FFmpeg.git "$WORKSPACE_DIR/ffmpeg-source"
 else
-    echo "FFmpeg source repository already exists. Skipping."
+  echo "FFmpeg source repository already exists. Skipping."
 fi
 
 if [ ! -d "$WORKSPACE_DIR/nvidia-codec-headers-source" ]; then
-    echo "Cloning NVidia codec headers repository (n12.2.72.0)..."
-    git clone -b "n12.2.72.0" --single-branch https://github.com/FFmpeg/nv-codec-headers.git "$WORKSPACE_DIR/nvidia-codec-headers-source"
+  echo "Cloning NVidia codec headers repository (n12.2.72.0)..."
+  git clone -b "n12.2.72.0" --single-branch https://github.com/FFmpeg/nv-codec-headers.git "$WORKSPACE_DIR/nvidia-codec-headers-source"
 else
-    echo "NVidia codec headers source repository already exists. Skipping."
+  echo "NVidia codec headers source repository already exists. Skipping."
 fi
 
 if [ ! -d "$WORKSPACE_DIR/mpv-source" ]; then
-    echo "Cloning mpv player source repository (v0.41.0)..."
-    git clone -b "v0.41.0" --single-branch https://github.com/mpv-player/mpv.git "$WORKSPACE_DIR/mpv-source"
+  echo "Cloning mpv player source repository (v0.41.0)..."
+  git clone -b "v0.41.0" --single-branch https://github.com/mpv-player/mpv.git "$WORKSPACE_DIR/mpv-source"
 else
-    echo "mpv source repository already exists. Skipping."
+  echo "mpv source repository already exists. Skipping."
 fi
 
 echo "=== Environment Setup Complete. You are ready to build. ==="

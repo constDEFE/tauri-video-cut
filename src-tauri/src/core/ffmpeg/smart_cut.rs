@@ -1,10 +1,9 @@
 use crate::core::ProcessManager;
-use crate::core::ffmpeg::capabilities;
 use crate::core::ffmpeg::executor::{
     add_audio_mappings_with_metadata, execute_ffmpeg_with_progress, get_output_extension,
 };
 use crate::error::{AppError, Result};
-use crate::logger::{log_debug, log_error, log_info, log_warn};
+use crate::logger::{log_debug, log_error, log_info};
 use crate::types::metadata::AudioTrack;
 use crate::utils::cmd::new_command;
 use crate::utils::paths::app_temp_dir;
@@ -65,8 +64,7 @@ where
 {
     log_info!(input = %input_path, k1, k2, k3, k4, start_is_keyframe, end_is_keyframe, codec = %video_codec, "Starting smart cut");
 
-    let caps = capabilities::get_hw_capabilities(ffmpeg_path, process_manager.as_ref()).await?;
-    let encoder_chain = capabilities::get_encoder_fallback_chain(video_codec, &caps);
+    let encoder = get_matching_encoder(video_codec);
 
     let temp_dir = app_temp_dir().join("temp_segments");
     fs::create_dir_all(&temp_dir).map_err(|e| {
@@ -116,7 +114,6 @@ where
 
     let mut parts = Vec::new();
     let mut current_progress = 0.0;
-    let mut working_encoder: Option<String> = None;
 
     log_debug!(
         phase = "start_encode",
@@ -128,13 +125,13 @@ where
         let duration = k2 - k1;
         let mut cb = progress_callback.clone();
 
-        let encoder_used = encode_segment_with_fallback(
+        encode_segment_with_fallback(
             ffmpeg_path,
             input_path,
             &temp_start_encode,
             k1,
             duration,
-            &encoder_chain,
+            &encoder,
             audio_stream_indices,
             audio_tracks,
             Some(format!("expr:gte(t,{:.3})", k2 - k1)),
@@ -142,8 +139,6 @@ where
             process_manager,
         )
         .await?;
-
-        working_encoder = Some(encoder_used);
         parts.push(temp_start_encode.to_str().unwrap().to_string());
         current_progress += start_weight;
     }
@@ -205,20 +200,14 @@ where
     if !end_is_keyframe {
         let duration = k4 - k3;
 
-        let chain_to_use = if let Some(ref encoder) = working_encoder {
-            vec![encoder.clone()]
-        } else {
-            encoder_chain.clone()
-        };
-
         let mut cb = progress_callback.clone();
-        let encoder_used = encode_segment_with_fallback(
+        encode_segment_with_fallback(
             ffmpeg_path,
             input_path,
             &temp_end_encode,
             k3,
             duration,
-            &chain_to_use,
+            &encoder,
             audio_stream_indices,
             audio_tracks,
             Some("expr:eq(n,0)".to_string()),
@@ -226,10 +215,6 @@ where
             process_manager,
         )
         .await?;
-
-        if working_encoder.is_none() {
-            working_encoder = Some(encoder_used);
-        }
 
         parts.push(temp_end_encode.to_str().unwrap().to_string());
     }
@@ -380,84 +365,85 @@ async fn encode_segment_with_fallback<F>(
     output_path: &Path,
     start_time: f64,
     duration: f64,
-    encoder_chain: &[String],
+    encoder: &String,
     audio_stream_indices: &[usize],
     audio_tracks: &[&AudioTrack],
     force_keyframes: Option<String>,
     mut progress_callback: F,
     process_manager: &Arc<ProcessManager>,
-) -> Result<String>
+) -> Result<()>
 where
     F: FnMut(f64) + Send + 'static,
 {
-    let mut last_error = None;
+    log_debug!(
+        encoder = %encoder,
+        start_time,
+        duration,
+        "Using encoder"
+    );
 
-    for encoder in encoder_chain {
-        log_debug!(encoder = %encoder, start_time, duration, "Trying encoder");
-
-        let mut args = vec![
-            "-ss".to_string(),
-            format!("{:.3}", start_time),
-            "-i".to_string(),
-            input_path.to_string(),
-            "-t".to_string(),
-            format!("{:.3}", duration),
-            "-c:v".to_string(),
-            encoder.clone(),
-        ];
-        add_encoder_params(&mut args, encoder);
-        if let Some(ref keyframes) = force_keyframes {
-            args.extend(["-force_key_frames".to_string(), keyframes.clone()]);
-        }
-        args.extend([
-            "-c:a".to_string(),
-            "copy".to_string(),
-            "-map".to_string(),
-            "0:v:0".to_string(),
-        ]);
-        add_audio_mappings_with_metadata(&mut args, audio_stream_indices, audio_tracks, false);
-        args.extend([
-            "-y".to_string(),
-            "-progress".to_string(),
-            "pipe:2".to_string(),
-            output_path.to_str().unwrap().to_string(),
-        ]);
-
-        match execute_ffmpeg_with_progress(
-            ffmpeg_path,
-            &args,
-            duration,
-            &mut progress_callback,
-            process_manager,
-        )
-        .await
-        {
-            Ok(_) => return Ok(encoder.clone()),
-            Err(e) => {
-                log_warn!(encoder = %encoder, error = %e, "Encoder failed; trying next in chain");
-
-                last_error = Some(e);
-                let _ = fs::remove_file(output_path);
-            }
-        }
+    let mut args = vec![
+        "-ss".to_string(),
+        format!("{:.3}", start_time),
+        "-i".to_string(),
+        input_path.to_string(),
+        "-t".to_string(),
+        format!("{:.3}", duration),
+        "-c:v".to_string(),
+        encoder.clone(),
+    ];
+    add_encoder_params(&mut args, encoder);
+    if let Some(ref keyframes) = force_keyframes {
+        args.extend(["-force_key_frames".to_string(), keyframes.clone()]);
     }
+    args.extend([
+        "-c:a".to_string(),
+        "copy".to_string(),
+        "-map".to_string(),
+        "0:v:0".to_string(),
+    ]);
+    add_audio_mappings_with_metadata(&mut args, audio_stream_indices, audio_tracks, false);
+    args.extend([
+        "-y".to_string(),
+        "-progress".to_string(),
+        "pipe:2".to_string(),
+        output_path.to_str().unwrap().to_string(),
+    ]);
 
-    log_error!("All encoders in fallback chain exhausted");
+    log_info!(args = format!("{:#?}", args), "ENCODING ARGS");
 
-    Err(last_error
-        .unwrap_or_else(|| AppError::FFmpegError("Encoder fallback chain is empty".to_string())))
+    execute_ffmpeg_with_progress(
+        ffmpeg_path,
+        &args,
+        duration,
+        &mut progress_callback,
+        process_manager,
+    )
+    .await
+    .map_err(|e| {
+        log_error!(encoder = %encoder, error = %e, "Encoder failed");
+
+        let _ = fs::remove_file(output_path);
+        AppError::FFmpegError(format!("Encoder failed: {}", e))
+    })?;
+
+    Ok(())
+}
+
+fn get_matching_encoder(codec: &str) -> String {
+    match codec {
+        "h264" => "libx264".to_string(),
+        "hevc" | "h265" => "libx265".to_string(),
+        "av1" => "libsvtav1".to_string(),
+        "vp9" => "libvpx-vp9".to_string(),
+        "vp8" => "libvpx".to_string(),
+        "mpeg4" | "mpeg2video" => "libx264".to_string(),
+        _ => "libx264".to_string(),
+    }
 }
 
 fn add_encoder_params(args: &mut Vec<String>, encoder: &str) {
     match encoder {
-        "h264_nvenc" | "hevc_nvenc" | "av1_nvenc" => args.extend([
-            "-preset".to_string(),
-            "p4".to_string(),
-            "-rc".to_string(),
-            "vbr".to_string(),
-            "-cq".to_string(),
-            DEFAULT_X264_QP.to_string(),
-        ]),
         "libx264" | "libx265" => args.extend([
             "-preset".to_string(),
             DEFAULT_X264_PRESET.to_string(),

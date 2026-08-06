@@ -17,9 +17,8 @@ if [ -z "$FFMPEG_BUILD_DIR" ] || [ "$FFMPEG_BUILD_DIR" == "/" ]; then
   exit 1
 fi
 
-echo "Cleaning old FFmpeg binaries (preserving headers and Nvidia pkgconfig files)..."
-rm -rf "$FFMPEG_BUILD_DIR/bin"
-rm -rf "$FFMPEG_BUILD_DIR/share"
+echo "Wiping old build artifacts..."
+rm -rf "$FFMPEG_BUILD_DIR"
 mkdir -p "$FFMPEG_BUILD_DIR"
 
 cd "$FFMPEG_REPO_DIR"
@@ -69,9 +68,6 @@ echo "Executing custom lean feature configuration..."
   --enable-swresample \
   --enable-zlib \
   \
-  --enable-ffnvcodec \
-  --enable-nvenc \
-  \
   --enable-hardcoded-tables \
   --enable-gpl \
   --enable-libx264 \
@@ -81,7 +77,7 @@ echo "Executing custom lean feature configuration..."
   --enable-libdav1d \
   \
   --enable-decoder=libdav1d,av1,h264,hevc,vp9,aac,ac3,eac3,mp3,opus,flac,alac,pcm_s16le,pcm_s24le,pcm_s32le,pcm_f32le,vorbis,rawvideo,mpeg4,mpeg2video,mjpeg \
-  --enable-encoder=libx264,libx265,libsvtav1,libvpx_vp9,av1_nvenc,h264_nvenc,hevc_nvenc,pcm_s16le,pcm_s24le,pcm_s32le,pcm_f32le,aac,opus \
+  --enable-encoder=libx264,libx265,libsvtav1,libvpx_vp9,pcm_s16le,pcm_s24le,pcm_s32le,pcm_f32le,aac,opus \
   --enable-parser=av1,h264,hevc,aac,mjpeg,vp9,opus,mpeg4,ac3,mpegaudio,flac,vorbis,mpegvideo \
   --enable-demuxer=mov,matroska,avi,mpegts,flv,ogg,wav,concat,pcm_s8,pcm_s16le \
   --enable-muxer=mp4,matroska,webm,avi,mov,pcm_s8,pcm_s16le \
