@@ -46,8 +46,21 @@ pub async fn stream_waveform(
         target_rate,
         quantized_duration,
     )?;
-    let cached_points = probe(&cache_path);
 
+    let cache_key = cache_path.to_string_lossy().into_owned();
+
+    if let Some(old_job_id) = registry.evict(&cache_key) {
+        let reg_clone = registry.inner().clone();
+        let old_id = old_job_id.clone();
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(500), async move {
+            while reg_clone.is_running(&old_id) {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+    }
+
+    let cached_points = probe(&cache_path);
     if cached_points >= TOTAL_WAVEFORM_POINTS {
         log_info!(
             job_id = %job_id,
@@ -104,7 +117,7 @@ pub async fn stream_waveform(
     }
 
     let cancel_token = CancellationToken::new();
-    registry.register(job_id.clone(), cancel_token.clone());
+    registry.register(job_id.clone(), cancel_token.clone(), cache_key);
 
     let task_job_id = job_id.clone();
     let task_ffmpeg_path = get_ffmpeg_path(&app).map_err(|e| e.to_string())?;

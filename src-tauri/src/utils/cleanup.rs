@@ -18,7 +18,7 @@ pub fn cleanup_orphaned_temp_segments() {
             let path = entry.path();
             if let Ok(metadata) = entry.metadata() {
                 if metadata.is_file() {
-                    if let Ok(_) = fs::remove_file(&path) {
+                    if fs::remove_file(&path).is_ok() {
                         removed_count += 1;
                     }
                 }
@@ -48,11 +48,17 @@ pub fn cleanup_old_waveforms() {
                 if let Ok(metadata) = entry.metadata() {
                     if let Ok(modified) = metadata.modified() {
                         if modified < cutoff {
-                            if let Ok(_) = fs::remove_file(&path) {
+                            if fs::remove_file(&path).is_ok() {
                                 removed_count += 1;
                             }
                         }
                     }
+                }
+            }
+
+            if path.extension() == Some(OsStr::new("part")) {
+                if fs::remove_file(&path).is_ok() {
+                    removed_count += 1;
                 }
             }
         }
@@ -60,7 +66,7 @@ pub fn cleanup_old_waveforms() {
         log_info!(
             removed_count,
             cutoff_days = 30,
-            "Cleaned up old waveform caches"
+            "Cleaned up old waveform caches and stale parts"
         );
     }
 }

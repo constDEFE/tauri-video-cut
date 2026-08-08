@@ -1,8 +1,9 @@
-use std::fs::{self, File, OpenOptions};
+use std::fs;
 use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use crate::core::waveform::model::TOTAL_WAVEFORM_POINTS;
+use crate::utils::fsx::{create_staging, open_shared_read};
 use crate::utils::paths::app_temp_dir;
 
 pub const CACHE_VERSION: u32 = 1;
@@ -48,6 +49,16 @@ pub fn get_cache_path(
     Ok(dir.join(format!("wf_{}_{:016x}.bin", CACHE_VERSION, state)))
 }
 
+pub fn part_path_for(cache_path: &Path, job_id: &str) -> PathBuf {
+    let mut name = cache_path.file_name().unwrap_or_default().to_os_string();
+    name.push(".");
+    name.push(std::process::id().to_string());
+    name.push("-");
+    name.push(job_id);
+    name.push(".part");
+    cache_path.with_file_name(name)
+}
+
 #[inline]
 pub fn decode_point(chunk: &[u8]) -> (u8, u8, u8, u8, u8, u8) {
     // Layout: rms_l, rms_r, up_l, down_l, up_r, down_r
@@ -55,7 +66,8 @@ pub fn decode_point(chunk: &[u8]) -> (u8, u8, u8, u8, u8, u8) {
 }
 
 pub fn read_raw_points(cache_path: &Path, start: usize, count: usize) -> Result<Vec<u8>, String> {
-    let mut file = File::open(cache_path).map_err(|e| format!("Cache open failed: {e}"))?;
+    let mut file = open_shared_read(cache_path)
+        .ok_or_else(|| format!("Cache open failed: {:?}", cache_path))?;
     let pos = CACHE_HEADER_SIZE + (start as u64 * POINT_SIZE);
     file.seek(SeekFrom::Start(pos))
         .map_err(|e| format!("Cache seek failed: {e}"))?;
@@ -69,9 +81,9 @@ pub fn probe(cache_path: &Path) -> usize {
     if !cache_path.exists() {
         return 0;
     }
-    let mut file = match File::open(cache_path) {
-        Ok(f) => f,
-        Err(_) => return 0,
+    let mut file = match open_shared_read(cache_path) {
+        Some(f) => f,
+        None => return 0,
     };
     let mut header = [0u8; 8];
     if file.read_exact(&mut header).is_err() || &header[0..4] != b"WVFM" {
@@ -90,40 +102,71 @@ pub fn probe(cache_path: &Path) -> usize {
     }
     let data_size = file_size - CACHE_HEADER_SIZE;
     let max_data_size = TOTAL_WAVEFORM_POINTS as u64 * POINT_SIZE;
-    let valid_size = CACHE_HEADER_SIZE + data_size.min(max_data_size);
-    let cached_points = (data_size.min(max_data_size) / POINT_SIZE) as usize;
-
-    if file_size > valid_size {
-        drop(file);
-        if OpenOptions::new()
-            .write(true)
-            .open(cache_path)
-            .and_then(|f| f.set_len(valid_size))
-            .is_err()
-        {
-            let _ = fs::remove_file(cache_path);
-            return 0;
-        }
-    }
-    cached_points
+    (data_size.min(max_data_size) / POINT_SIZE) as usize
 }
 
-pub fn open_writer(cache_path: &Path) -> Option<BufWriter<File>> {
-    let existed_before = cache_path.exists();
+pub struct CacheWriter {
+    part_path: PathBuf,
+    cache_path: PathBuf,
+    writer: Option<BufWriter<std::fs::File>>,
+    points_written: usize,
+    published: bool,
+}
 
-    let file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(cache_path)
-        .ok()?;
-
-    let mut writer = BufWriter::new(file);
-
-    if !existed_before {
-        let _ = writer.write_all(b"WVFM");
-        let _ = writer.write_all(&CACHE_VERSION.to_le_bytes());
-        let _ = writer.flush();
+impl CacheWriter {
+    pub fn create(cache_path: &Path, job_id: &str, prefix: &[u8]) -> Option<Self> {
+        let part_path = part_path_for(cache_path, job_id);
+        let mut writer = create_staging(&part_path)?;
+        writer.write_all(b"WVFM").ok()?;
+        writer.write_all(&CACHE_VERSION.to_le_bytes()).ok()?;
+        writer.write_all(prefix).ok()?;
+        writer.flush().ok()?;
+        Some(Self {
+            part_path,
+            cache_path: cache_path.to_path_buf(),
+            writer: Some(writer),
+            points_written: prefix.len() / POINT_SIZE as usize,
+            published: false,
+        })
     }
 
-    Some(writer)
+    pub fn write_batch(&mut self, batch: &[u8]) -> std::io::Result<()> {
+        if let Some(w) = &mut self.writer {
+            w.write_all(batch)?;
+            w.flush()?;
+            self.points_written += batch.len() / POINT_SIZE as usize;
+        }
+        Ok(())
+    }
+
+    pub fn publish(&mut self) {
+        if self.published {
+            return;
+        }
+        if let Some(mut w) = self.writer.take() {
+            let _ = w.flush();
+            drop(w);
+        }
+
+        let existing = probe(&self.cache_path);
+        if self.points_written > existing {
+            if std::fs::rename(&self.part_path, &self.cache_path).is_err() {
+                let _ = std::fs::remove_file(&self.cache_path);
+                if std::fs::rename(&self.part_path, &self.cache_path).is_err() {
+                    let _ = std::fs::remove_file(&self.part_path);
+                }
+            }
+        } else {
+            let _ = std::fs::remove_file(&self.part_path);
+        }
+        self.published = true;
+    }
+}
+
+impl Drop for CacheWriter {
+    fn drop(&mut self) {
+        if !self.published {
+            self.publish();
+        }
+    }
 }

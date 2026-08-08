@@ -1,5 +1,4 @@
-use std::fs::File;
-use std::io::{BufWriter, Write};
+use std::time::Duration;
 use tauri::AppHandle;
 use tauri::Emitter;
 use tokio::io::AsyncReadExt;
@@ -9,13 +8,14 @@ use tokio_util::sync::CancellationToken;
 
 use crate::core::ProcessManager;
 use crate::core::waveform::cache::{
-    POINT_SIZE, decode_point, get_cache_path, open_writer, probe, read_raw_points,
+    CacheWriter, POINT_SIZE, decode_point, get_cache_path, probe, read_raw_points,
 };
 use crate::core::waveform::model::{
     DEFAULT_POINTS_PER_EVENT, StreamWaveformRequest, TOTAL_WAVEFORM_POINTS, WaveformChunkEvent,
     WaveformFinishedEvent,
 };
 use crate::logger::{log_error, log_info, log_warn};
+use crate::utils::fsx::CacheLock;
 
 pub const BYTES_PER_SAMPLE: usize = 2;
 pub const BYTES_PER_FRAME: usize = 2 * BYTES_PER_SAMPLE;
@@ -128,8 +128,6 @@ fn emit_batch(
     .map_err(|error| format!("Failed to emit waveform chunk: {error}"))
 }
 
-// ── Streaming Worker & State ─────────────────────────────────────────
-
 pub struct WaveformState {
     current_bin_index: usize,
     frame_cursor: u64,
@@ -153,8 +151,7 @@ pub struct WaveformState {
     output_right_down: Vec<u8>,
 
     emitted_points: usize,
-    cache_file: Option<BufWriter<File>>,
-
+    cache_writer: Option<CacheWriter>,
     batch_max_peak: u8,
     max_left_peak: u8,
     max_right_peak: u8,
@@ -198,7 +195,7 @@ impl WaveformState {
     pub fn new(
         points_per_event: usize,
         initial_emitted: usize,
-        cache_file: Option<BufWriter<File>>,
+        cache_writer: Option<CacheWriter>,
         start_frame: u64,
     ) -> Self {
         Self {
@@ -224,11 +221,16 @@ impl WaveformState {
             output_right_down: Vec::with_capacity(points_per_event),
 
             emitted_points: initial_emitted,
-            cache_file,
-
+            cache_writer,
             batch_max_peak: 0,
             max_left_peak: 0,
             max_right_peak: 0,
+        }
+    }
+
+    pub fn publish_cache(&mut self) {
+        if let Some(w) = self.cache_writer.as_mut() {
+            w.publish();
         }
     }
 
@@ -250,6 +252,7 @@ impl WaveformState {
             if self.current_bin_index >= TOTAL_WAVEFORM_POINTS {
                 break;
             }
+
             let bin_end_frame =
                 ((self.current_bin_index as u64 + 1) * expected_frames) / total_points;
             if self.frame_cursor >= bin_end_frame {
@@ -284,7 +287,7 @@ impl WaveformState {
     }
 
     fn write_batch_to_cache(&mut self, job_id: &str) {
-        let Some(writer) = &mut self.cache_file else {
+        let Some(writer) = &mut self.cache_writer else {
             return;
         };
 
@@ -299,15 +302,14 @@ impl WaveformState {
             buffer.push(self.output_right_up[i]);
             buffer.push(self.output_right_down[i]);
         }
-
-        if let Err(e) = writer.write_all(&buffer).and_then(|_| writer.flush()) {
+        if let Err(e) = writer.write_batch(&buffer) {
             log_warn!(
                 job_id,
                 error = %e,
                 "Cache write failed; disabling cache for remainder of job"
             );
 
-            self.cache_file = None;
+            self.cache_writer = None;
         }
     }
 
@@ -393,7 +395,6 @@ impl WaveformState {
             self.output_right_up.push(right_up);
             self.output_right_down.push(right_down);
 
-            // Track batch max and global max
             let point_max = left_up.max(left_down).max(right_up).max(right_down);
             self.batch_max_peak = self.batch_max_peak.max(point_max);
             self.max_left_peak = self.max_left_peak.max(left_up).max(left_down);
@@ -451,81 +452,109 @@ pub async fn run_waveform_job(
         target_rate,
         quantized_duration,
     )?;
+
+    let lock_path = cache_path.with_extension("lock");
+    let _lock = match CacheLock::try_acquire(&lock_path) {
+        Some(l) => Some(l),
+        None => {
+            let mut l = None;
+            for _ in 0..50 {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                if let Some(got) = CacheLock::try_acquire(&lock_path) {
+                    l = Some(got);
+                    break;
+                }
+            }
+            l
+        }
+    };
+
     let start_point = request
         .resume_from_point
         .unwrap_or(0)
         .min(TOTAL_WAVEFORM_POINTS);
+
     let cached_points = probe(&cache_path);
+
+    let prefix: Vec<u8> = if cached_points > 0 {
+        read_raw_points(&cache_path, 0, cached_points).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let resume_points = prefix.len() / POINT_SIZE as usize;
 
     let mut cached_max_left_peak: u8 = 0;
     let mut cached_max_right_peak: u8 = 0;
-
-    if cached_points > 0 {
-        if let Ok(scan) = read_raw_points(&cache_path, 0, cached_points) {
-            for chunk in scan.chunks_exact(POINT_SIZE as usize) {
-                let (_rl, _rr, up_l, down_l, up_r, down_r) = decode_point(chunk);
-                cached_max_left_peak = cached_max_left_peak.max(up_l).max(down_l);
-                cached_max_right_peak = cached_max_right_peak.max(up_r).max(down_r);
-            }
-        }
+    for chunk in prefix.chunks_exact(POINT_SIZE as usize) {
+        let (_rl, _rr, up_l, down_l, up_r, down_r) = decode_point(chunk);
+        cached_max_left_peak = cached_max_left_peak.max(up_l).max(down_l);
+        cached_max_right_peak = cached_max_right_peak.max(up_r).max(down_r);
     }
 
-    if cached_points > start_point {
-        if let Ok(data) = read_raw_points(&cache_path, start_point, cached_points - start_point) {
-            log_info!(
-                job_id,
-                cached_points,
-                start_point,
-                points_to_replay = cached_points - start_point,
-                "Replaying cached waveform data"
-            );
+    if resume_points > start_point {
+        let replay_start_idx = start_point * POINT_SIZE as usize;
+        let replay_data = &prefix[replay_start_idx..];
 
-            let mut offset = start_point;
-            let mut ptr = 0usize;
-            while offset < cached_points {
-                let count = (cached_points - offset).min(points_per_event);
-                let mut l_rms = Vec::with_capacity(count);
-                let mut r_rms = Vec::with_capacity(count);
-                let mut l_up = Vec::with_capacity(count);
-                let mut l_down = Vec::with_capacity(count);
-                let mut r_up = Vec::with_capacity(count);
-                let mut r_down = Vec::with_capacity(count);
-                let mut chunk_max: u8 = 0;
-                for _ in 0..count {
-                    let (rl, rr, up_l, down_l, up_r, down_r) =
-                        decode_point(&data[ptr..ptr + POINT_SIZE as usize]);
-                    l_rms.push(rl);
-                    r_rms.push(rr);
-                    l_up.push(up_l);
-                    l_down.push(down_l);
-                    r_up.push(up_r);
-                    r_down.push(down_r);
-                    chunk_max = chunk_max.max(up_l).max(down_l).max(up_r).max(down_r);
-                    ptr += POINT_SIZE as usize;
+        log_info!(
+            job_id,
+            cached_points,
+            start_point,
+            points_to_replay = resume_points - start_point,
+            "Replaying cached waveform data"
+        );
+        let mut offset = start_point;
+        let mut ptr = 0usize;
+        while offset < resume_points {
+            let count = (resume_points - offset).min(points_per_event);
+            let mut l_rms = Vec::with_capacity(count);
+            let mut r_rms = Vec::with_capacity(count);
+            let mut l_up = Vec::with_capacity(count);
+            let mut l_down = Vec::with_capacity(count);
+            let mut r_up = Vec::with_capacity(count);
+            let mut r_down = Vec::with_capacity(count);
+            let mut chunk_max: u8 = 0;
+            for _ in 0..count {
+                if ptr + POINT_SIZE as usize > replay_data.len() {
+                    break;
                 }
-                let chunk_gain =
-                    compute_display_gain(cached_max_left_peak.max(cached_max_right_peak));
-                let _ = emit_batch(
-                        app,
-                        job_id,
-                        request.track_index,
-                        points_per_event,
-                        l_rms, r_rms, l_up, l_down, r_up, r_down,
-                        chunk_max,
-                        offset,
-                        chunk_gain,
-                    )
-                    .map_err(|e| {
-                        log_warn!(job_id, offset, error = %e, "Failed to emit cached waveform chunk")
-                    });
-                offset += count;
+                let (rl, rr, up_l, down_l, up_r, down_r) =
+                    decode_point(&replay_data[ptr..ptr + POINT_SIZE as usize]);
+                l_rms.push(rl);
+                r_rms.push(rr);
+                l_up.push(up_l);
+                l_down.push(down_l);
+                r_up.push(up_r);
+                r_down.push(down_r);
+                chunk_max = chunk_max.max(up_l).max(down_l).max(up_r).max(down_r);
+                ptr += POINT_SIZE as usize;
             }
+            let chunk_gain = compute_display_gain(cached_max_left_peak.max(cached_max_right_peak));
+            let _ = emit_batch(
+                app,
+                job_id,
+                request.track_index,
+                points_per_event,
+                l_rms,
+                r_rms,
+                l_up,
+                l_down,
+                r_up,
+                r_down,
+                chunk_max,
+                offset,
+                chunk_gain,
+            )
+            .map_err(
+                |e| log_warn!(job_id, offset, error = %e, "Failed to emit cached waveform chunk"),
+            );
+            offset += count;
         }
     }
 
-    if cached_points >= TOTAL_WAVEFORM_POINTS {
+    if resume_points >= TOTAL_WAVEFORM_POINTS {
         let max_peak = cached_max_left_peak.max(cached_max_right_peak);
         let display_gain = compute_display_gain(max_peak);
+
         log_info!(
             job_id,
             cached_points,
@@ -535,6 +564,7 @@ pub async fn run_waveform_job(
             display_gain,
             "Fully cached; skipping FFmpeg decode"
         );
+
         let _ = app.emit(
             "waveform://finished",
             WaveformFinishedEvent {
@@ -557,7 +587,7 @@ pub async fn run_waveform_job(
         video = %request.video_path,
         track = request.track_index,
         target_rate,
-        resume_at = cached_points,
+        resume_at = resume_points,
         "Starting FFmpeg waveform decode"
     );
 
@@ -574,11 +604,12 @@ pub async fn run_waveform_job(
     ];
 
     let start_frame =
-        ((cached_points as f64 / TOTAL_WAVEFORM_POINTS as f64) * expected_frames as f64) as u64;
-    let cache_file = open_writer(&cache_path);
-    let mut waveform_state =
-        WaveformState::new(points_per_event, cached_points, cache_file, start_frame);
+        ((resume_points as f64 / TOTAL_WAVEFORM_POINTS as f64) * expected_frames as f64) as u64;
 
+    let cache_writer = CacheWriter::create(&cache_path, job_id, &prefix);
+
+    let mut waveform_state =
+        WaveformState::new(points_per_event, resume_points, cache_writer, start_frame);
     waveform_state.max_left_peak = cached_max_left_peak;
     waveform_state.max_right_peak = cached_max_right_peak;
 
@@ -587,9 +618,11 @@ pub async fn run_waveform_job(
     let start_time_arg = format!("{:.6}", start_time);
     let track_index_arg = format!("0:{}", request.track_index);
     let target_rate_arg = target_rate.to_string();
-    if cached_points > 0 && cached_points < TOTAL_WAVEFORM_POINTS {
+
+    if resume_points > 0 && resume_points < TOTAL_WAVEFORM_POINTS {
         args.extend(["-ss", &start_time_arg]);
     }
+
     args.extend(&[
         "-i",
         &request.video_path,
@@ -644,7 +677,6 @@ pub async fn run_waveform_job(
     let mut read_buffer = vec![0_u8; READ_BUFFER_SIZE];
     let mut pending = Vec::<u8>::with_capacity(READ_BUFFER_SIZE + BYTES_PER_FRAME);
     let mut decoded_frames = 0_u64;
-
     let mut completed = false;
 
     loop {
@@ -653,7 +685,9 @@ pub async fn run_waveform_job(
             _ = cancel_token.cancelled() => {
                 let _ = child.kill().await;
                 let _ = child.wait().await;
+
                 log_info!(job_id, "Waveform job cancelled by user");
+
                 return Err("Job cancelled by user".into());
             }
             read_result = reader.read(&mut read_buffer) => {
@@ -704,6 +738,7 @@ pub async fn run_waveform_job(
 
     if !completed && !status.success() {
         let stderr_message = stderr_task.await.unwrap_or_default();
+
         return Err(if stderr_message.is_empty() {
             format!("FFmpeg exited with status {status}")
         } else {
@@ -718,7 +753,9 @@ pub async fn run_waveform_job(
         waveform_state.drain_outputs(app, job_id, request.track_index, points_per_event)?;
     }
 
-    if cached_points > 0 {
+    waveform_state.publish_cache();
+
+    if resume_points > 0 {
         let expected_remaining = expected_frames.saturating_sub(start_frame);
         let drift = decoded_frames.abs_diff(expected_remaining);
         if drift > expected_remaining.max(1) / 50 {
@@ -762,6 +799,5 @@ pub async fn run_waveform_job(
             display_gain,
         },
     );
-
     Ok(())
 }
