@@ -24,6 +24,7 @@ pub enum CutMode {
         start_is_keyframe: bool,
         end_is_keyframe: bool,
     },
+    FullEncode,
 }
 
 pub fn add_audio_mappings_with_metadata(
@@ -31,6 +32,7 @@ pub fn add_audio_mappings_with_metadata(
     audio_stream_indices: &[usize],
     audio_tracks: &[&AudioTrack],
     is_generated_file: bool,
+    is_final_output: bool,
 ) {
     if audio_stream_indices.is_empty() {
         args.push("-an".to_string());
@@ -59,13 +61,15 @@ pub fn add_audio_mappings_with_metadata(
                 }
             }
         }
+        args.push("-movflags".to_string());
 
-        args.extend([
-            "-movflags".to_string(),
-            "+use_metadata_tags+faststart".to_string(),
-            "-map_metadata".to_string(),
-            "0".to_string(),
-        ])
+        if is_final_output {
+            args.push("+use_metadata_tags+faststart".to_string());
+        } else {
+            args.push("+use_metadata_tags".to_string());
+        }
+
+        args.extend(["-map_metadata".to_string(), "0".to_string()]);
     }
 }
 
@@ -130,7 +134,7 @@ where
     if !status.success() {
         let trailing_logs = log_buffer.into_iter().collect::<Vec<String>>().join("\n");
 
-        log_error!(status = %status, stderr = %trailing_logs, "FFmpeg exited with non-zero status");
+        log_error!(args = format!("{:#?}", args), status = %status, stderr = %trailing_logs, "FFmpeg exited with non-zero status");
 
         return Err(AppError::FFmpegError(format!(
             "FFmpeg exited with status: {}\n--- FFmpeg Stderr Log ---\n{}",
@@ -154,20 +158,18 @@ pub fn build_export_args(
     audio_stream_indices: &[usize],
     audio_tracks: &[&AudioTrack],
 ) -> Vec<String> {
-    let mut args = Vec::new();
-
-    args.extend([
+    let mut args = vec![
         "-ss".to_string(),
-        format!("{:.3}", start),
+        format!("{:.6}", start),
         "-i".to_string(),
         input_path.to_string(),
         "-to".to_string(),
-        format!("{:.3}", end - start),
+        format!("{:.6}", end - start),
         "-map".to_string(),
         "0:v:0".to_string(),
-    ]);
+    ];
 
-    add_audio_mappings_with_metadata(&mut args, audio_stream_indices, audio_tracks, false);
+    add_audio_mappings_with_metadata(&mut args, audio_stream_indices, audio_tracks, false, true);
 
     args.extend([
         "-c".to_string(),

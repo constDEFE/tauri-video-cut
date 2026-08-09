@@ -4,8 +4,6 @@ import { toast } from "sonner";
 import { useExport } from "@/features/export/execution";
 import { useNavigate, useRoute } from "@/shared/lib/router";
 
-import { formatETA } from "../lib";
-
 export const ExportProgress = () => {
 	const route = useRoute();
 	const navigate = useNavigate();
@@ -47,10 +45,6 @@ export const ExportProgress = () => {
 					<p class="text-2xl font-semibold">
 						{progress.currentSegment} / {progress.totalSegments}
 					</p>
-				</div>
-				<div class="text-accent flex items-baseline justify-between select-none">
-					<p class="text-sm">Estimated Time</p>
-					<p class="text-xl font-medium">{formatETA(progress.etaSeconds)}</p>
 				</div>
 			</div>
 			<p class="text-text mt-4 text-center text-sm select-none">

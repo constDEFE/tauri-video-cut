@@ -7,9 +7,26 @@ use crate::types::export::{ExportProgress, ExportRequest, ExportResult};
 use crate::utils::paths::{get_ffmpeg_path, get_ffprobe_path};
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Instant;
 use tauri::{AppHandle, Emitter};
 use tracing::instrument;
+
+fn create_progress_callback(
+    app_handle: AppHandle,
+    current_segment: usize,
+    total_segments: usize,
+) -> impl FnMut(f64) + Send + Clone + 'static {
+    move |progress: f64| {
+        let progress = progress.clamp(0.0, 100.0);
+        let _ = app_handle.emit(
+            "export-progress",
+            ExportProgress {
+                current_segment,
+                total_segments,
+                current_segment_progress: progress,
+            },
+        );
+    }
+}
 
 #[instrument(skip(app_handle, process_manager), fields(segments = request.segments.len(), video = %request.video_path, smart_cut = request.smart_cut), err(Debug))]
 #[tauri::command]
@@ -38,8 +55,7 @@ pub async fn export_segments(
 
     let ffmpeg_path = get_ffmpeg_path(&app_handle)?;
     let ffprobe_path = get_ffprobe_path(&app_handle)?;
-
-    let (metadata, keyframes) = tokio::try_join!(
+    let (metadata, keyframes, source_params) = tokio::try_join!(
         probe::probe_video(
             &ffprobe_path,
             &ffmpeg_path,
@@ -47,6 +63,11 @@ pub async fn export_segments(
             process_manager.inner()
         ),
         probe::get_keyframes(&ffprobe_path, &request.video_path, process_manager.inner()),
+        probe::probe_video_codec_params(
+            &ffprobe_path,
+            &request.video_path,
+            process_manager.inner()
+        ),
     )?;
 
     let total_segments = request.segments.len();
@@ -55,12 +76,7 @@ pub async fn export_segments(
 
     let process_manager = Arc::new((*process_manager).clone());
 
-    let mut segment_times: Vec<f64> = Vec::new();
-
     for (idx, segment) in request.segments.iter().enumerate() {
-        let segment_start = Instant::now();
-        let mut ema_eta: f64 = 0.0; // exponential moving average for ETA
-
         let output_filename = format!("{}-{:03}.{}", request.file_prefix, idx + 1, ext);
         let output_path = Path::new(&request.output_folder).join(&output_filename);
 
@@ -71,8 +87,7 @@ pub async fn export_segments(
                 if track_idx == 0 {
                     return None;
                 }
-                let array_idx = track_idx - 1;
-                metadata.audio_tracks.get(array_idx)?;
+                metadata.audio_tracks.get(track_idx - 1)?;
                 Some(track_idx)
             })
             .collect();
@@ -84,8 +99,7 @@ pub async fn export_segments(
                 if track_idx == 0 {
                     return None;
                 }
-                let array_idx = track_idx - 1;
-                metadata.audio_tracks.get(array_idx)
+                metadata.audio_tracks.get(track_idx - 1)
             })
             .collect();
 
@@ -108,52 +122,49 @@ pub async fn export_segments(
             if start_is_keyframe && end_is_keyframe {
                 executor::CutMode::StreamCopy
             } else {
-                let k2 =
-                    keyframes::find_next_keyframe(segment.start, &keyframes).ok_or_else(|| {
-                        AppError::ExportError(format!(
-                            "Cannot find keyframe after segment {} start",
-                            idx + 1
-                        ))
-                    })?;
+                let k2 = keyframes::find_next_keyframe(segment.start, &keyframes);
+                let k3 = keyframes::find_prev_keyframe(segment.end, &keyframes);
+                match (k2, k3) {
+                    (Some(k2), Some(k3)) if k2 < k3 => executor::CutMode::SmartCut {
+                        k1,
+                        k2,
+                        k3,
+                        k4,
+                        start_is_keyframe,
+                        end_is_keyframe,
+                    },
+                    _ => {
+                        log_debug!(
+                            segment = idx + 1,
+                            k2 = ?k2,
+                            k3 = ?k3,
+                            "No valid intermediate keyframes; using full encode"
+                        );
 
-                let k3 =
-                    keyframes::find_prev_keyframe(segment.end, &keyframes).ok_or_else(|| {
-                        AppError::ExportError(format!(
-                            "Cannot find keyframe before segment {} end",
-                            idx + 1
-                        ))
-                    })?;
-
-                executor::CutMode::SmartCut {
-                    k1,
-                    k2,
-                    k3,
-                    k4,
-                    start_is_keyframe,
-                    end_is_keyframe,
+                        executor::CutMode::FullEncode
+                    }
                 }
             }
         } else {
             executor::CutMode::StreamCopy
         };
 
-        log_info!(segment = idx + 1, total = total_segments, start = segment.start, end = segment.end, cut_mode = ?cut_mode, "Processing segment");
+        log_info!(
+            segment = idx + 1,
+            total = total_segments,
+            start = segment.start,
+            end = segment.end,
+            cut_mode = ?cut_mode,
+            "Processing segment"
+        );
 
-        let app_handle_clone = app_handle.clone();
         let current_segment = idx + 1;
-        let segment_times_len = segment_times.len();
-        let segment_times_avg = if !segment_times.is_empty() {
-            segment_times.iter().sum::<f64>() / segment_times.len() as f64
-        } else {
-            0.0
-        };
-
-        let export_duration = k4 - k1;
 
         match cut_mode {
             executor::CutMode::StreamCopy => {
                 log_debug!(segment = idx + 1, "Using stream copy mode");
 
+                let export_duration = k4 - k1;
                 let args = executor::build_export_args(
                     &request.video_path,
                     output_path.to_str().unwrap(),
@@ -162,43 +173,13 @@ pub async fn export_segments(
                     &audio_stream_indices,
                     &selected_audio_tracks,
                 );
-
+                let mut cb =
+                    create_progress_callback(app_handle.clone(), current_segment, total_segments);
                 executor::execute_ffmpeg_with_progress(
                     &ffmpeg_path,
                     &args,
                     export_duration,
-                    &mut move |progress| {
-                        // Use EMA for stable ETA; avoid division by near-zero progress
-                        if segment_times_len == 0 && progress > 1.0 {
-                            ema_eta = segment_start.elapsed().as_secs_f64() * 100.0 / progress;
-                        } else if progress > 1.0 {
-                            ema_eta = 0.9 * ema_eta
-                                + 0.1 * (segment_start.elapsed().as_secs_f64() * 100.0 / progress);
-                        }
-                        let avg_time_per_segment = if segment_times_len > 0 {
-                            segment_times_avg
-                        } else if ema_eta > 0.0 {
-                            ema_eta
-                        } else {
-                            0.0
-                        };
-
-                        let current_segment_remaining =
-                            (100.0 - progress).max(0.0) / 100.0 * avg_time_per_segment;
-                        let remaining_segments = (total_segments - current_segment) as f64;
-                        let eta = current_segment_remaining.max(0.0)
-                            + (remaining_segments * avg_time_per_segment);
-
-                        let _ = app_handle_clone.emit(
-                            "export-progress",
-                            ExportProgress {
-                                current_segment,
-                                total_segments,
-                                current_segment_progress: progress,
-                                eta_seconds: eta,
-                            },
-                        );
-                    },
+                    &mut cb,
                     process_manager.as_ref(),
                 )
                 .await?;
@@ -213,6 +194,9 @@ pub async fn export_segments(
             } => {
                 log_debug!(segment = idx + 1, k1, k2, k3, k4, "Using smart cut mode");
 
+                let cb =
+                    create_progress_callback(app_handle.clone(), current_segment, total_segments);
+
                 smart_cut::execute_smart_cut(
                     &ffmpeg_path,
                     &request.video_path,
@@ -220,7 +204,6 @@ pub async fn export_segments(
                     k1,
                     k2,
                     k3,
-                    k4,
                     segment.start,
                     segment.end,
                     start_is_keyframe,
@@ -228,45 +211,34 @@ pub async fn export_segments(
                     &audio_stream_indices,
                     &selected_audio_tracks,
                     &metadata.video_codec,
+                    &source_params,
                     &process_manager.clone(),
-                    move |progress| {
-                        // Use EMA for stable ETA; avoid division by near-zero progress
-                        if segment_times_len == 0 && progress > 1.0 {
-                            ema_eta = segment_start.elapsed().as_secs_f64() * 100.0 / progress;
-                        } else if progress > 1.0 {
-                            ema_eta = 0.9 * ema_eta
-                                + 0.1 * (segment_start.elapsed().as_secs_f64() * 100.0 / progress);
-                        }
-                        let avg_time_per_segment = if segment_times_len > 0 {
-                            segment_times_avg
-                        } else if ema_eta > 0.0 {
-                            ema_eta
-                        } else {
-                            0.0
-                        };
+                    cb,
+                )
+                .await?;
+            }
+            executor::CutMode::FullEncode => {
+                log_debug!(segment = idx + 1, "Using full encode mode");
 
-                        let current_segment_remaining =
-                            (100.0 - progress).max(0.0) / 100.0 * avg_time_per_segment;
-                        let remaining_segments = (total_segments - current_segment) as f64;
-                        let eta = current_segment_remaining.max(0.0)
-                            + (remaining_segments * avg_time_per_segment);
-
-                        let _ = app_handle_clone.emit(
-                            "export-progress",
-                            ExportProgress {
-                                current_segment,
-                                total_segments,
-                                current_segment_progress: progress,
-                                eta_seconds: eta,
-                            },
-                        );
-                    },
+                let cb =
+                    create_progress_callback(app_handle.clone(), current_segment, total_segments);
+                smart_cut::execute_full_encode(
+                    &ffmpeg_path,
+                    &request.video_path,
+                    output_path.to_str().unwrap(),
+                    segment.start,
+                    segment.end,
+                    k1,
+                    &audio_stream_indices,
+                    &selected_audio_tracks,
+                    &metadata.video_codec,
+                    &process_manager.clone(),
+                    cb,
                 )
                 .await?;
             }
         }
 
-        segment_times.push(segment_start.elapsed().as_secs_f64());
         output_files.push(output_path.to_string_lossy().to_string());
 
         log_info!(files = output_files.len(), "Export completed");

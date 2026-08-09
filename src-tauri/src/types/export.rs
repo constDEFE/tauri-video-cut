@@ -21,7 +21,6 @@ pub struct ExportProgress {
     pub current_segment: usize,
     pub total_segments: usize,
     pub current_segment_progress: f64,
-    pub eta_seconds: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]

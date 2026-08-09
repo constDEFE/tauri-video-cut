@@ -15,7 +15,6 @@ type ExportProgress = {
 	current_segment: number;
 	total_segments: number;
 	current_segment_progress: number;
-	eta_seconds: number;
 };
 
 type SegmentExportRequest = {
@@ -41,14 +40,12 @@ type ProgressState = {
 	currentSegment: number;
 	totalSegments: number;
 	completionPercent: number;
-	etaSeconds: number;
 };
 
 const initialState: ProgressState = {
 	currentSegment: 0,
 	totalSegments: 0,
-	completionPercent: 0,
-	etaSeconds: 0
+	completionPercent: 0
 };
 
 type ExportReturn = {
@@ -70,8 +67,7 @@ export const useExport = (settings: ExportSettings): ExportReturn => {
 		setProgress({
 			currentSegment: e.payload.current_segment,
 			totalSegments: e.payload.total_segments,
-			completionPercent: e.payload.current_segment_progress,
-			etaSeconds: e.payload.eta_seconds
+			completionPercent: e.payload.current_segment_progress
 		});
 	};
 
@@ -105,8 +101,7 @@ export const useExport = (settings: ExportSettings): ExportReturn => {
 				setProgress({
 					currentSegment: 0,
 					totalSegments: segments.length,
-					completionPercent: 0,
-					etaSeconds: 0
+					completionPercent: 0
 				});
 
 				const result = await invoke<ExportResult>("export_segments", { request });

@@ -77,10 +77,10 @@ echo "Executing custom lean feature configuration..."
   --enable-libdav1d \
   \
   --enable-decoder=libdav1d,av1,h264,hevc,vp9,aac,ac3,eac3,mp3,opus,flac,alac,pcm_s16le,pcm_s24le,pcm_s32le,pcm_f32le,vorbis,rawvideo,mpeg4,mpeg2video,mjpeg \
-  --enable-encoder=libx264,libx265,libsvtav1,libvpx_vp9,pcm_s16le,pcm_s24le,pcm_s32le,pcm_f32le,aac,opus \
+  --enable-encoder=libx264,libx265,libsvtav1,libvpx_vp9,pcm_s16le,pcm_s24le,pcm_s32le,pcm_f32le,aac,opus,wrapped_avframe \
   --enable-parser=av1,h264,hevc,aac,mjpeg,vp9,opus,mpeg4,ac3,mpegaudio,flac,vorbis,mpegvideo \
   --enable-demuxer=mov,matroska,avi,mpegts,flv,ogg,wav,concat,pcm_s8,pcm_s16le \
-  --enable-muxer=mp4,matroska,webm,avi,mov,pcm_s8,pcm_s16le \
+  --enable-muxer=mp4,matroska,webm,avi,mov,null,pcm_s8,pcm_s16le \
   --enable-protocol=file,pipe \
   --enable-filter=trim,atrim,setpts,asetpts,format,aformat,aresample,null,anull \
   --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc,av1_frame_merge,extract_extradata,vp9_superframe,vp9_superframe_split,mpeg4_unpack_bframes,aac_adtstoasc,opus_metadata \

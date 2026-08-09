@@ -2,8 +2,9 @@ use crate::core::ProcessManager;
 use crate::core::ffmpeg::executor::{
     add_audio_mappings_with_metadata, execute_ffmpeg_with_progress, get_output_extension,
 };
+use crate::core::ffmpeg::probe::VideoCodecParams;
 use crate::error::{AppError, Result};
-use crate::logger::{log_debug, log_error, log_info};
+use crate::logger::{log_debug, log_error, log_info, log_warn};
 use crate::types::metadata::AudioTrack;
 use crate::utils::cmd::new_command;
 use crate::utils::paths::app_temp_dir;
@@ -11,14 +12,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
-use tokio::io::AsyncBufReadExt;
 
 const DEFAULT_X264_QP: u32 = 18;
 const DEFAULT_X265_QP: u32 = 18;
 const DEFAULT_SVT_AV1_QP: u32 = 20;
 const DEFAULT_VP9_CRF: u32 = 18;
 const DEFAULT_QSCALE: u32 = 2;
-
 const DEFAULT_X264_PRESET: &str = "medium";
 const DEFAULT_SVT_AV1_PRESET: &str = "6";
 
@@ -41,6 +40,58 @@ impl Drop for TempCleanup {
     }
 }
 
+fn level_to_arg(level: u32) -> String {
+    if level == 9 {
+        "1b".to_string()
+    } else {
+        format!("{}.{}", level / 10, level % 10)
+    }
+}
+
+pub async fn execute_full_encode<F>(
+    ffmpeg_path: &Path,
+    input_path: &str,
+    output_path: &str,
+    start: f64,
+    end: f64,
+    k1: f64,
+    audio_stream_indices: &[usize],
+    audio_tracks: &[&AudioTrack],
+    video_codec: &str,
+    process_manager: &Arc<ProcessManager>,
+    progress_callback: F,
+) -> Result<()>
+where
+    F: FnMut(f64) + Send + 'static,
+{
+    let duration = end - start;
+    log_info!(
+        input = %input_path, start, end, duration, k1, codec = %video_codec,
+        "Starting full segment encode (no intermediate keyframes)"
+    );
+    let encoder = get_matching_encoder(video_codec);
+    encode_segment(
+        ffmpeg_path,
+        input_path,
+        Path::new(output_path),
+        k1,
+        Some(start - k1),
+        duration,
+        &encoder,
+        audio_stream_indices,
+        audio_tracks,
+        None,
+        true,
+        None,
+        progress_callback,
+        process_manager,
+    )
+    .await?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 pub async fn execute_smart_cut<F>(
     ffmpeg_path: &Path,
     input_path: &str,
@@ -48,7 +99,6 @@ pub async fn execute_smart_cut<F>(
     k1: f64,
     k2: f64,
     k3: f64,
-    k4: f64,
     start: f64,
     end: f64,
     start_is_keyframe: bool,
@@ -56,13 +106,19 @@ pub async fn execute_smart_cut<F>(
     audio_stream_indices: &[usize],
     audio_tracks: &[&AudioTrack],
     video_codec: &str,
+    source_params: &VideoCodecParams,
     process_manager: &Arc<ProcessManager>,
     mut progress_callback: F,
 ) -> Result<()>
 where
     F: FnMut(f64) + Send + 'static + Clone,
 {
-    log_info!(input = %input_path, k1, k2, k3, k4, start_is_keyframe, end_is_keyframe, codec = %video_codec, "Starting smart cut");
+    log_info!(
+        input = %input_path, k1, k2, k3,
+        start_is_keyframe, end_is_keyframe,
+        codec = %video_codec,
+        "Starting smart cut"
+    );
 
     let encoder = get_matching_encoder(video_codec);
 
@@ -82,141 +138,171 @@ where
     let temp_start_encode = temp_dir.join(format!("start_encode_{}.{}", timestamp, ext));
     let temp_middle_copy = temp_dir.join(format!("middle_copy_{}.{}", timestamp, ext));
     let temp_end_encode = temp_dir.join(format!("end_encode_{}.{}", timestamp, ext));
-    let temp_concat = temp_dir.join(format!("concat_{}.{}", timestamp, ext));
+    let temp_video = temp_dir.join(format!("concat_video_{}.{}", timestamp, ext));
 
     let _cleanup = TempCleanup::new(vec![
         temp_start_encode.clone(),
         temp_middle_copy.clone(),
         temp_end_encode.clone(),
-        temp_concat.clone(),
+        temp_video.clone(),
     ]);
 
-    let encoding_weight = 10.0;
-    let total_work = if !start_is_keyframe { k2 - k1 } else { 0.0 }
-        + (k3 - k2)
-        + if !end_is_keyframe { k4 - k3 } else { 0.0 };
+    let has_audio = !audio_stream_indices.is_empty();
 
-    let start_work = if !start_is_keyframe { k2 - k1 } else { 0.0 };
-    let middle_work = k3 - k2;
-    let end_work = if !end_is_keyframe { k4 - k3 } else { 0.0 };
+    const ENCODING_WEIGHT: f64 = 10.0;
+    const COPY_WEIGHT: f64 = 1.0;
+    const AUDIO_WEIGHT: f64 = 1.0;
 
-    let start_weight = if !start_is_keyframe {
-        start_work * encoding_weight / total_work
+    let copy_start = if start_is_keyframe { start } else { k2 };
+    let copy_end = if end_is_keyframe { end } else { k3 };
+
+    let head_work = if !start_is_keyframe {
+        (k2 - start) * ENCODING_WEIGHT
     } else {
         0.0
     };
-    let middle_weight = middle_work / total_work;
-    let end_weight = if !end_is_keyframe {
-        end_work * encoding_weight / total_work
+    let middle_work = (copy_end - copy_start) * COPY_WEIGHT;
+    let tail_work = if !end_is_keyframe {
+        (end - k3) * ENCODING_WEIGHT
+    } else {
+        0.0
+    };
+    let concat_work = (end - start) * COPY_WEIGHT;
+    let audio_work = if has_audio {
+        (end - start) * AUDIO_WEIGHT
     } else {
         0.0
     };
 
-    let mut parts = Vec::new();
-    let mut current_progress = 0.0;
+    let total_work = head_work + middle_work + tail_work + concat_work + audio_work;
+    let width = |w: f64| {
+        if total_work > 0.0 {
+            w / total_work * 100.0
+        } else {
+            0.0
+        }
+    };
+    let head_width = width(head_work);
+    let middle_width = width(middle_work);
+    let tail_width = width(tail_work);
+    let concat_width = width(concat_work);
+    let audio_width = width(audio_work);
 
-    log_debug!(
-        phase = "start_encode",
-        duration = k2 - k1,
-        "Encoding start segment"
-    );
+    let mut parts: Vec<String> = Vec::new();
+    let mut current_progress: f64 = 0.0;
 
     if !start_is_keyframe {
-        let duration = k2 - k1;
-        let mut cb = progress_callback.clone();
+        let head_duration = k2 - start;
 
-        encode_segment_with_fallback(
+        log_debug!(
+            phase = "start_encode",
+            input_seek = k1,
+            output_seek = start - k1,
+            duration = head_duration,
+            "Encoding head segment (video only)"
+        );
+
+        let mut cb = progress_callback.clone();
+        let base = current_progress;
+
+        encode_segment(
             ffmpeg_path,
             input_path,
             &temp_start_encode,
             k1,
-            duration,
+            Some(start - k1),
+            head_duration,
             &encoder,
             audio_stream_indices,
             audio_tracks,
-            Some(format!("expr:gte(t,{:.3})", k2 - k1)),
-            move |prog| cb(current_progress + prog * start_weight),
+            None,
+            false,
+            Some(source_params),
+            move |prog| cb(base + prog / 100.0 * head_width),
             process_manager,
         )
         .await?;
         parts.push(temp_start_encode.to_str().unwrap().to_string());
-        current_progress += start_weight;
+        current_progress += head_width;
     }
 
-    let copy_start = if start_is_keyframe { start } else { k2 };
-    let copy_end = if end_is_keyframe { end } else { k3 };
     let copy_duration = copy_end - copy_start;
+    if copy_duration > 0.0 {
+        log_debug!(
+            phase = "middle_copy",
+            copy_start,
+            copy_end,
+            duration = copy_duration,
+            "Copying middle segment (video only)"
+        );
 
-    let mut args_copy = vec![
-        "-ss".to_string(),
-        format!("{:.3}", copy_start),
-        "-i".to_string(),
-        input_path.to_string(),
-        "-t".to_string(),
-        format!("{:.3}", copy_duration),
-        "-map".to_string(),
-        "0:v:0".to_string(),
-    ];
+        let args_copy = vec![
+            "-hide_banner".to_string(),
+            "-ss".to_string(),
+            format!("{:.6}", copy_start),
+            "-i".to_string(),
+            input_path.to_string(),
+            "-t".to_string(),
+            format!("{:.6}", copy_duration),
+            "-map".to_string(),
+            "0:v:0".to_string(),
+            "-an".to_string(),
+            "-c".to_string(),
+            "copy".to_string(),
+            "-avoid_negative_ts".to_string(),
+            "make_zero".to_string(),
+            "-y".to_string(),
+            "-progress".to_string(),
+            "pipe:2".to_string(),
+            temp_middle_copy.to_str().unwrap().to_string(),
+        ];
+        execute_ffmpeg_with_progress(
+            ffmpeg_path,
+            &args_copy,
+            copy_duration,
+            &mut |prog| {
+                progress_callback(current_progress + prog / 100.0 * middle_width);
+            },
+            process_manager,
+        )
+        .await?;
 
-    add_audio_mappings_with_metadata(&mut args_copy, audio_stream_indices, audio_tracks, false);
-
-    args_copy.extend([
-        "-c".to_string(),
-        "copy".to_string(),
-        "-y".to_string(),
-        "-progress".to_string(),
-        "pipe:2".to_string(),
-        temp_middle_copy.to_str().unwrap().to_string(),
-    ]);
-
-    log_debug!(
-        phase = "middle_copy",
-        copy_start,
-        copy_end,
-        duration = copy_duration,
-        "Copying middle segment"
-    );
-
-    execute_ffmpeg_with_progress(
-        ffmpeg_path,
-        &args_copy,
-        copy_duration,
-        &mut |prog| {
-            progress_callback(current_progress + prog * middle_weight);
-        },
-        process_manager,
-    )
-    .await?;
-
-    parts.push(temp_middle_copy.to_str().unwrap().to_string());
-    current_progress += middle_weight;
-
-    log_debug!(
-        phase = "end_encode",
-        duration = k4 - k3,
-        "Encoding end segment"
-    );
+        parts.push(temp_middle_copy.to_str().unwrap().to_string());
+        current_progress += middle_width;
+    }
 
     if !end_is_keyframe {
-        let duration = k4 - k3;
+        let tail_duration = end - k3;
+        log_debug!(
+            phase = "end_encode",
+            input_seek = k3,
+            duration = tail_duration,
+            "Encoding tail segment (video only)"
+        );
 
         let mut cb = progress_callback.clone();
-        encode_segment_with_fallback(
+        let base = current_progress;
+
+        encode_segment(
             ffmpeg_path,
             input_path,
             &temp_end_encode,
             k3,
-            duration,
+            None,
+            tail_duration,
             &encoder,
             audio_stream_indices,
             audio_tracks,
             Some("expr:eq(n,0)".to_string()),
-            move |prog| cb(current_progress + prog * end_weight),
+            false,
+            Some(source_params),
+            move |prog| cb(base + prog / 100.0 * tail_width),
             process_manager,
         )
         .await?;
 
         parts.push(temp_end_encode.to_str().unwrap().to_string());
+        current_progress += tail_width;
     }
 
     let concat_content = parts
@@ -226,149 +312,258 @@ where
         .join("\n");
 
     let concat_list = temp_dir.join(format!("concat_list_{}.txt", timestamp));
+
     fs::write(&concat_list, &concat_content)
         .map_err(|e| AppError::ExportError(format!("Failed to write concat list: {}", e)))?;
 
-    let mut args_concat = vec![
+    let concat_target: PathBuf = if has_audio {
+        temp_video.clone()
+    } else {
+        PathBuf::from(output_path)
+    };
+
+    let args_concat = vec![
+        "-hide_banner".to_string(),
         "-f".to_string(),
         "concat".to_string(),
         "-safe".to_string(),
         "0".to_string(),
-        "-fflags".to_string(),
-        "+genpts".to_string(),
         "-i".to_string(),
         concat_list.to_str().unwrap().to_string(),
         "-map".to_string(),
         "0:v".to_string(),
-    ];
-
-    add_audio_mappings_with_metadata(&mut args_concat, audio_stream_indices, audio_tracks, true);
-
-    args_concat.extend([
+        "-an".to_string(),
         "-c".to_string(),
         "copy".to_string(),
         "-y".to_string(),
-        temp_concat.to_str().unwrap().to_string(),
-    ]);
+        "-progress".to_string(),
+        "pipe:2".to_string(),
+        concat_target.to_str().unwrap().to_string(),
+    ];
 
     log_debug!(
         phase = "concat",
         parts = parts.len(),
-        "Concatenating segments"
+        "Concatenating video-only segments"
     );
 
-    let mut child = new_command(ffmpeg_path)
-        .args(&args_concat)
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| AppError::FFmpegError(format!("Failed to spawn ffmpeg concat: {}", e)))?;
+    execute_ffmpeg_with_progress(
+        ffmpeg_path,
+        &args_concat,
+        end - start,
+        &mut |prog| {
+            progress_callback(current_progress + prog / 100.0 * concat_width);
+        },
+        process_manager,
+    )
+    .await?;
 
-    process_manager.attach(&child)?;
+    current_progress += concat_width;
 
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| AppError::FFmpegError("Failed to capture concat stderr".to_string()))?;
+    let mut boundaries: Vec<f64> = Vec::new();
+    let mut t = 0.0;
 
-    let reader = tokio::io::BufReader::new(stderr);
-    let lines = reader.lines();
-    let mut lines = Box::pin(lines);
-
-    let mut concat_log = Vec::new();
-    while let Ok(Some(line)) = lines.next_line().await {
-        concat_log.push(line);
+    if !start_is_keyframe {
+        t += k2 - start;
+        boundaries.push(t);
     }
 
-    let status = child
-        .wait()
-        .await
-        .map_err(|e| AppError::FFmpegError(format!("Failed to wait for concat: {}", e)))?;
+    t += copy_end - copy_start;
 
-    if !status.success() {
-        let log_output = concat_log.join("\n");
-
-        log_error!(status = %status, stderr = %log_output, "Smart cut concatenation failed");
-
-        return Err(AppError::FFmpegError(format!(
-            "Concat failed with status: {}\n=== FFmpeg stderr ===\n{}",
-            status, log_output
-        )));
+    if !end_is_keyframe {
+        boundaries.push(t);
     }
 
-    let concat_weight = 0.02;
-    let trim_weight = 0.03;
+    if !validate_boundaries(ffmpeg_path, &concat_target, &boundaries, process_manager).await {
+        if !has_audio {
+            let _ = fs::remove_file(output_path);
+        }
 
-    progress_callback(current_progress + concat_weight);
+        log_warn!(
+            "Boundary decode validation failed: re-encoded parts are not parameter-compatible with this source. Falling back to full encode for this segment."
+        );
 
-    let trim_start = if start_is_keyframe { 0.0 } else { start - k1 };
-    let trim_duration = end - start;
+        let base = current_progress;
+        let remaining = (100.0 - base).max(0.0);
+        let mut done_cb = progress_callback.clone();
+        let result = execute_full_encode(
+            ffmpeg_path,
+            input_path,
+            output_path,
+            start,
+            end,
+            k1,
+            audio_stream_indices,
+            audio_tracks,
+            video_codec,
+            process_manager,
+            move |prog| progress_callback(base + prog / 100.0 * remaining),
+        )
+        .await;
 
-    let mut args_trim = vec![
-        "-ss".to_string(),
-        format!("{:.3}", trim_start),
-        "-i".to_string(),
-        temp_concat.to_str().unwrap().to_string(),
-        "-t".to_string(),
-        format!("{:.3}", trim_duration),
-        "-map".to_string(),
-        "0:v:0".to_string(),
-    ];
+        if result.is_ok() {
+            done_cb(100.0);
+        }
 
-    add_audio_mappings_with_metadata(&mut args_trim, audio_stream_indices, audio_tracks, true);
-
-    args_trim.extend([
-        "-c".to_string(),
-        "copy".to_string(),
-        "-y".to_string(),
-        output_path.to_string(),
-    ]);
-
-    log_debug!(
-        phase = "trim",
-        trim_start,
-        trim_duration,
-        "Trimming concatenated output"
-    );
-
-    let mut trim_child = new_command(ffmpeg_path)
-        .args(&args_trim)
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| AppError::FFmpegError(format!("Failed to spawn ffmpeg trim: {}", e)))?;
-
-    process_manager.attach(&trim_child)?;
-
-    let trim_status = trim_child
-        .wait()
-        .await
-        .map_err(|e| AppError::FFmpegError(format!("Failed to wait for trim: {}", e)))?;
-
-    if !trim_status.success() {
-        log_error!(status = %trim_status, "Smart cut final trim failed");
-
-        return Err(AppError::FFmpegError(format!(
-            "Trim failed with status: {}",
-            trim_status
-        )));
+        return result;
     }
 
-    progress_callback(current_progress + concat_weight + trim_weight);
+    if has_audio {
+        let mut args_mux = vec![
+            "-hide_banner".to_string(),
+            "-ss".to_string(),
+            format!("{:.6}", start),
+            "-i".to_string(),
+            input_path.to_string(),
+            "-i".to_string(),
+            temp_video.to_str().unwrap().to_string(),
+            "-t".to_string(),
+            format!("{:.6}", end - start),
+            "-map".to_string(),
+            "1:v:0".to_string(),
+        ];
 
+        for (out_idx, &stream_idx) in audio_stream_indices.iter().enumerate() {
+            args_mux.extend(["-map".to_string(), format!("0:{}", stream_idx)]);
+            if let Some(track) = audio_tracks.get(out_idx) {
+                if let Some(name) = &track.name {
+                    args_mux.extend([
+                        format!("-metadata:s:a:{}", out_idx),
+                        format!("title={}", name),
+                    ]);
+                }
+            }
+        }
+
+        args_mux.extend([
+            "-c:v".to_string(),
+            "copy".to_string(),
+            "-c:a".to_string(),
+            "copy".to_string(),
+            "-avoid_negative_ts".to_string(),
+            "make_zero".to_string(),
+            "-movflags".to_string(),
+            "+use_metadata_tags+faststart".to_string(),
+            "-map_metadata".to_string(),
+            "0".to_string(),
+            "-y".to_string(),
+            "-progress".to_string(),
+            "pipe:2".to_string(),
+            output_path.to_string(),
+        ]);
+
+        log_debug!(
+            phase = "audio_mux",
+            "Muxing stream-copied audio over concatenated video"
+        );
+
+        let base = current_progress;
+        execute_ffmpeg_with_progress(
+            ffmpeg_path,
+            &args_mux,
+            end - start,
+            &mut |prog| progress_callback(base + prog / 100.0 * audio_width),
+            process_manager,
+        )
+        .await?;
+    }
+
+    progress_callback(100.0);
     let _ = fs::remove_file(&concat_list);
 
     Ok(())
 }
 
-async fn encode_segment_with_fallback<F>(
+async fn validate_boundaries(
+    ffmpeg_path: &Path,
+    file: &Path,
+    boundaries: &[f64],
+    process_manager: &ProcessManager,
+) -> bool {
+    for &b in boundaries {
+        let window_start = (b - 0.2).max(0.0);
+        let args = [
+            "-hide_banner".to_string(),
+            "-v".to_string(),
+            "error".to_string(),
+            "-xerror".to_string(),
+            "-err_detect".to_string(),
+            "explode".to_string(),
+            "-an".to_string(),
+            "-ss".to_string(),
+            format!("{:.6}", window_start),
+            "-i".to_string(),
+            file.to_str().unwrap().to_string(),
+            "-t".to_string(),
+            "0.6".to_string(),
+            "-f".to_string(),
+            "null".to_string(),
+            "-".to_string(),
+        ];
+        let child = match new_command(ffmpeg_path)
+            .args(&args)
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                log_warn!(error = %e, "Failed to spawn boundary validation");
+
+                return false;
+            }
+        };
+        if let Err(e) = process_manager.attach(&child) {
+            log_warn!(error = %e, "Failed to attach boundary validation process");
+
+            return false;
+        }
+        match child.wait_with_output().await {
+            Ok(out) if out.status.success() => {
+                log_debug!(boundary = b, "Boundary decode validation passed");
+            }
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                if stderr.contains("Error opening output file") || stderr.contains("is not known") {
+                    log_warn!(
+                        boundary = b,
+                        stderr = %stderr.lines().take(3).collect::<Vec<_>>().join(" | "),
+                        "Boundary validation could not run; assuming compatible"
+                    );
+                } else {
+                    let snippet = stderr.lines().take(5).collect::<Vec<_>>().join(" | ");
+
+                    log_warn!(
+                        boundary = b,
+                        stderr = %snippet,
+                        "Decode errors at concat boundary - re-encoded parameters incompatible with source"
+                    );
+
+                    return false;
+                }
+            }
+            Err(e) => {
+                log_warn!(error = %e, "Boundary validation wait failed");
+
+                return false;
+            }
+        }
+    }
+    true
+}
+
+async fn encode_segment<F>(
     ffmpeg_path: &Path,
     input_path: &str,
     output_path: &Path,
-    start_time: f64,
+    input_seek: f64,
+    output_seek: Option<f64>,
     duration: f64,
-    encoder: &String,
+    encoder: &str,
     audio_stream_indices: &[usize],
     audio_tracks: &[&AudioTrack],
     force_keyframes: Option<String>,
+    with_audio: bool,
+    source_hints: Option<&VideoCodecParams>,
     mut progress_callback: F,
     process_manager: &Arc<ProcessManager>,
 ) -> Result<()>
@@ -376,41 +571,62 @@ where
     F: FnMut(f64) + Send + 'static,
 {
     log_debug!(
-        encoder = %encoder,
-        start_time,
-        duration,
-        "Using encoder"
+        encoder = %encoder, input_seek, output_seek = ?output_seek, duration,
+        "Encoding segment"
     );
 
     let mut args = vec![
+        "-hide_banner".to_string(),
         "-ss".to_string(),
-        format!("{:.3}", start_time),
+        format!("{:.6}", input_seek),
         "-i".to_string(),
         input_path.to_string(),
-        "-t".to_string(),
-        format!("{:.3}", duration),
-        "-c:v".to_string(),
-        encoder.clone(),
     ];
-    add_encoder_params(&mut args, encoder);
+
+    if let Some(off) = output_seek {
+        if off > 0.001 {
+            args.extend(["-ss".to_string(), format!("{:.6}", off - 0.0005)]);
+        }
+    }
+
+    args.extend([
+        "-t".to_string(),
+        format!("{:.6}", duration),
+        "-c:v".to_string(),
+        encoder.to_string(),
+    ]);
+
+    add_encoder_params(&mut args, encoder, source_hints);
+
     if let Some(ref keyframes) = force_keyframes {
         args.extend(["-force_key_frames".to_string(), keyframes.clone()]);
     }
+
     args.extend([
-        "-c:a".to_string(),
-        "copy".to_string(),
         "-map".to_string(),
         "0:v:0".to_string(),
+        "-avoid_negative_ts".to_string(),
+        "make_zero".to_string(),
     ]);
-    add_audio_mappings_with_metadata(&mut args, audio_stream_indices, audio_tracks, false);
+
+    if with_audio {
+        args.extend(["-c:a".to_string(), "copy".to_string()]);
+        add_audio_mappings_with_metadata(
+            &mut args,
+            audio_stream_indices,
+            audio_tracks,
+            false,
+            true,
+        );
+    } else {
+        args.push("-an".to_string());
+    }
     args.extend([
         "-y".to_string(),
         "-progress".to_string(),
         "pipe:2".to_string(),
         output_path.to_str().unwrap().to_string(),
     ]);
-
-    log_info!(args = format!("{:#?}", args), "ENCODING ARGS");
 
     execute_ffmpeg_with_progress(
         ffmpeg_path,
@@ -425,9 +641,7 @@ where
 
         let _ = fs::remove_file(output_path);
         AppError::FFmpegError(format!("Encoder failed: {}", e))
-    })?;
-
-    Ok(())
+    })
 }
 
 fn get_matching_encoder(codec: &str) -> String {
@@ -442,7 +656,11 @@ fn get_matching_encoder(codec: &str) -> String {
     }
 }
 
-fn add_encoder_params(args: &mut Vec<String>, encoder: &str) {
+fn add_encoder_params(
+    args: &mut Vec<String>,
+    encoder: &str,
+    source_hints: Option<&VideoCodecParams>,
+) {
     match encoder {
         "libx264" | "libx265" => args.extend([
             "-preset".to_string(),
@@ -467,5 +685,33 @@ fn add_encoder_params(args: &mut Vec<String>, encoder: &str) {
             "0".to_string(),
         ]),
         _ => args.extend(["-qscale:v".to_string(), DEFAULT_QSCALE.to_string()]),
+    }
+
+    let Some(h) = source_hints else { return };
+    if matches!(encoder, "libx264" | "libx265") {
+        if encoder == "libx264" {
+            if let Some(p) = h.profile.as_deref() {
+                let mapped = match p.to_lowercase().as_str() {
+                    "high" => Some("high"),
+                    "main" => Some("main"),
+                    "baseline" | "constrained baseline" => Some("baseline"),
+                    _ => None,
+                };
+                if let Some(m) = mapped {
+                    args.extend(["-profile:v".to_string(), m.to_string()]);
+                }
+            }
+        }
+        if let Some(l) = h.level {
+            args.extend(["-level".to_string(), level_to_arg(l)]);
+        }
+        if let Some(pf) = &h.pix_fmt {
+            args.extend(["-pix_fmt".to_string(), pf.replace("yuvj", "yuv")]);
+        }
+        if let Some(cr) = &h.color_range {
+            if cr == "tv" || cr == "pc" {
+                args.extend(["-color_range".to_string(), cr.clone()]);
+            }
+        }
     }
 }

@@ -293,6 +293,7 @@ pub async fn get_keyframes(
 ) -> Result<Vec<f64>> {
     let child = new_command(ffprobe_path)
         .args(&[
+        		"-hide_banner",
             "-v",
             "quiet",
             "-select_streams",
@@ -391,4 +392,71 @@ pub fn parse_fps(fps_str: Option<&str>) -> Option<f64> {
     let den = parts.next()?.parse::<f64>().ok()?;
 
     if den > 0.0 { Some(num / den) } else { None }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct VideoCodecParams {
+    pub profile: Option<String>,
+    pub level: Option<u32>,
+    pub pix_fmt: Option<String>,
+    pub color_range: Option<String>,
+}
+
+pub async fn probe_video_codec_params(
+    ffprobe_path: &Path,
+    video_path: &str,
+    process_manager: &ProcessManager,
+) -> Result<VideoCodecParams> {
+    let child = new_command(ffprobe_path)
+        .args(&[
+            "-hide_banner",
+            "-v",
+            "quiet",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=profile,level,pix_fmt,color_range",
+            "-of",
+            "json",
+            video_path,
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            AppError::FFprobeError(format!("Failed to spawn ffprobe for codec params: {}", e))
+        })?;
+
+    process_manager.attach(&child)?;
+
+    let output = child
+        .wait_with_output()
+        .await
+        .map_err(|e| AppError::FFprobeError(format!("Failed to probe codec params: {}", e)))?;
+
+    if !output.status.success() {
+        return Err(AppError::FFprobeError(
+            "Codec params probe returned non-zero".to_string(),
+        ));
+    }
+
+    let v: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|e| AppError::FFprobeError(format!("Failed to parse codec params JSON: {}", e)))?;
+    let s = v.get("streams").and_then(|x| x.get(0));
+    let get = |k: &str| {
+        s.and_then(|o| o.get(k))
+            .and_then(|x| x.as_str())
+            .map(|x| x.to_string())
+    };
+
+    Ok(VideoCodecParams {
+        profile: get("profile"),
+        level: s
+            .and_then(|o| o.get("level"))
+            .and_then(|x| x.as_i64())
+            .map(|x| x as u32)
+            .filter(|&l| l > 0),
+        pix_fmt: get("pix_fmt"),
+        color_range: get("color_range"),
+    })
 }
