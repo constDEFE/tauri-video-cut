@@ -33,7 +33,7 @@ export const ExportProgress = () => {
 			<div class="border-secondary bg-surface w-full max-w-md space-y-4 rounded-lg border p-6">
 				<div class="text-accent">
 					<div class="flex justify-between text-sm select-none">
-						<p class="mb-2">Current Segment</p>
+						<p class="mb-2">Current Segment {isProbing && "(Extracting keyframes...)"}</p>
 						<p class="text-accent">{Math.round(progress.completionPercent)}%</p>
 					</div>
 					<div class="bg-accent-inverted relative h-2 w-full overflow-hidden rounded-full">
@@ -47,10 +47,7 @@ export const ExportProgress = () => {
 					</p>
 				</div>
 			</div>
-			<p class="text-text mt-4 text-center text-sm select-none">
-				{isProbing ? "Extracting keyframes..." : "Exporting your segments..."}
-			</p>
-			<button class="button mx-auto mt-2 rounded-md px-6 py-2 font-medium" onClick={handleCancel}>
+			<button class="button mx-auto mt-6 rounded-md px-6 py-2 font-medium" onClick={handleCancel}>
 				Cancel
 			</button>
 		</>
