@@ -4,7 +4,6 @@ import { toast } from "sonner";
 import { useSegmentsStore } from "@/entities/segments";
 import { useVideoStore } from "@/entities/video";
 import { useNavigate } from "@/shared/lib/router";
-import { useAppTheme } from "@/shared/lib/theme";
 import { invariant } from "@/shared/utils";
 
 import { parseExportFields } from "./parse-export-fields";
@@ -14,7 +13,6 @@ import type { EventFor } from "@/shared/types/react";
 export const useExportForm = () => {
 	const audioTracks = useVideoStore((s) => s.state.metadata?.audio_tracks);
 	const segments = useSegmentsStore((s) => s.state.segments);
-	const { theme } = useAppTheme();
 
 	const navigate = useNavigate();
 
