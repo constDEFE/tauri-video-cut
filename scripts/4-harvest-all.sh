@@ -32,7 +32,7 @@ cp "$STAGE_FF_DIR/ffprobe.exe" "$OUTPUT_DIR/"
 find "$STAGE_MPV_DIR" -maxdepth 1 -type f -name "*mpv*.dll" -exec cp {} "$OUTPUT_DIR/" \;
 
 echo "Attempting to download libmpv-wrapper bridge automatically..."
-WRAPPER_URL="https://github.com/nini22P/libmpv-wrapper/releases/latest/download/libmpv-wrapper-windows-x86_64.zip"
+WRAPPER_URL="https://github.com/nini22P/libmpv-wrapper/releases/download/v0.1.1/libmpv-wrapper-windows-x86_64.zip"
 
 set +e
 curl -L -f -o "$STAGE_MPV_WRAPPER_DIR/libmpv-wrapper.zip" "$WRAPPER_URL"
