@@ -67,13 +67,6 @@ else
   echo "FFmpeg source repository already exists. Skipping."
 fi
 
-if [ ! -d "$WORKSPACE_DIR/nvidia-codec-headers-source" ]; then
-  echo "Cloning NVidia codec headers repository (n12.2.72.0)..."
-  git clone -b "n12.2.72.0" --single-branch https://github.com/FFmpeg/nv-codec-headers.git "$WORKSPACE_DIR/nvidia-codec-headers-source"
-else
-  echo "NVidia codec headers source repository already exists. Skipping."
-fi
-
 if [ ! -d "$WORKSPACE_DIR/mpv-source" ]; then
   echo "Cloning mpv player source repository (v0.41.0)..."
   git clone -b "v0.41.0" --single-branch https://github.com/mpv-player/mpv.git "$WORKSPACE_DIR/mpv-source"
