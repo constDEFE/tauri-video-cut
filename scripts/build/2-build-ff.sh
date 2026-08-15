@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-echo "=== [3/5] Compiling Custom FFmpeg tools ==="
+echo "=== [2/4] Compiling Custom FFmpeg tools ==="
 
 if [ "$MSYSTEM" != "UCRT64" ]; then
   echo "ERROR: This script must be run inside an MSYS2 UCRT64 terminal shell"

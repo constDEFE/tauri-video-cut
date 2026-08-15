@@ -2,6 +2,7 @@
 	"name": "tauri-video-cut",
 	"version": "1.1.1",
 	"private": true,
+	"license": "Apache-2.0",
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/constDEFE/tauri-video-cut"
@@ -16,7 +17,8 @@
 		"lint:fix": "oxlint ./src --fix",
 		"format": "oxfmt --write \"src/**/*.{ts,tsx,css,json}\"",
 		"format:check": "oxfmt --check \"src/**/*.{ts,tsx,css,json}\"",
-		"check": "tsc --noEmit && oxlint ./src && oxfmt --check \"src/**/*.{ts,tsx,css,json}\""
+		"check": "tsc --noEmit && oxlint ./src && oxfmt --check \"src/**/*.{ts,tsx,css,json}\"",
+		"legal": "bun scripts/generate-legal.ts"
 	},
 	"dependencies": {
 		"@base-ui/react": "^1.5.0",
@@ -39,6 +41,7 @@
 		"@tailwindcss/vite": "^4.3.0",
 		"@tauri-apps/cli": "^2.11.2",
 		"@types/node": "^24",
+		"license-checker-rseidelsohn": "^5.0.1",
 		"oxfmt": "^0.57.0",
 		"oxlint": "^1.72.0",
 		"tailwindcss": "^4.3.0",

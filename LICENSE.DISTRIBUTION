@@ -1,0 +1,16 @@
+DISTRIBUTION LICENSE NOTICE
+===========================
+
+The source code of tauri-video-cut is licensed under the Apache License 2.0
+(see LICENSE).
+
+The compiled binary releases published on the GitHub Releases page bundle
+GPL-licensed components (FFmpeg built with --enable-gpl, mpv/libmpv, x264,
+x265). The distributed binaries are therefore provided under the GNU General
+Public License version 2 (see LICENSES/GPL-2.0-only.txt).
+
+Complete corresponding source code for all GPL components is available from
+this same repository as described in SOURCE-OFFER.md.
+
+Building this project from source without bundling those binaries produces
+software governed only by Apache-2.0.

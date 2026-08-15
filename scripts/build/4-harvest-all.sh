@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-echo "=== [5/5] Harvesting Binaries and System Runtime DLL Dependencies ==="
+echo "=== [4/4] Harvesting Binaries and System Runtime DLL Dependencies ==="
 
 if [ "$MSYSTEM" != "UCRT64" ]; then
   echo "ERROR: This script must be run inside an MSYS2 UCRT64 terminal shell"
@@ -12,7 +12,7 @@ WORKSPACE_DIR=$(pwd)
 STAGE_FF_DIR="$WORKSPACE_DIR/ffmpeg-dist/bin"
 STAGE_MPV_DIR="$WORKSPACE_DIR/mpv-dist/bin"
 STAGE_MPV_WRAPPER_DIR="$WORKSPACE_DIR/mpv-wrapper"
-OUTPUT_DIR="$WORKSPACE_DIR/../src-tauri/lib"
+OUTPUT_DIR="$WORKSPACE_DIR/../../src-tauri/lib"
 
 UCRT_BIN_DIR="${MINGW_PREFIX:-/ucrt64}/bin"
 
@@ -31,9 +31,14 @@ cp "$STAGE_FF_DIR/ffprobe.exe" "$OUTPUT_DIR/"
 
 find "$STAGE_MPV_DIR" -maxdepth 1 -type f -name "*mpv*.dll" -exec cp {} "$OUTPUT_DIR/" \;
 
-echo "Attempting to download libmpv-wrapper bridge automatically..."
-WRAPPER_URL="https://github.com/nini22P/libmpv-wrapper/releases/download/v0.1.1/libmpv-wrapper-windows-x86_64.zip"
+WRAPPER_TAG="v0.1.1"
+WRAPPER_URL="https://github.com/nini22P/libmpv-wrapper/releases/download/${WRAPPER_TAG}/libmpv-wrapper-windows-x86_64.zip"
 
+mkdir -p "$WORKSPACE_DIR/../../legal/generated"
+curl -fsSL "https://raw.githubusercontent.com/nini22P/libmpv-wrapper/${WRAPPER_TAG}/LICENSE" \
+  -o "$WORKSPACE_DIR/../../legal/generated/libmpv-wrapper-LICENSE" 2>/dev/null || true
+
+echo "Attempting to download libmpv-wrapper bridge automatically..."
 set +e
 curl -L -f -o "$STAGE_MPV_WRAPPER_DIR/libmpv-wrapper.zip" "$WRAPPER_URL"
 CURL_STATUS=$?
@@ -85,16 +90,18 @@ REQUIRED_DLLS=(
   "avcodec" "avdevice" "avfilter" "avformat"
   "avutil" "swresample" "swscale"
   # FFmpeg codec dependencies
-  "libdav1d" "libSvtAv1Enc" "libvpx" "libx264" "libx265"
+  "libdav1d" "libSvtAv1Enc" "libvpx"
+  "libx264" "libx265"
   # FFmpeg system deps
   "zlib" "libbz2"
   # mpv/libass rendering dependencies
   "libass" "libfontconfig" "libfreetype"
-  "libfribidi" "libharfbuzz-" "liblcms2-"
-  "libpcre2-" "libplacebo" "libpng" "libbrotlicommon"
+  "libfribidi" "libharfbuzz-0" "liblcms2-"
+  "libpcre2-8" "libplacebo" "libpng" "libbrotlicommon"
   "libbrotlidec" "libunibreak" "libglib" "libgraphite2"
-  "libdovi" "libexpat" "libintl" "libiconv" "libcaca"
-  "libopenal"
+  "libdovi" "libexpat" "libintl" "libiconv" "libzimg"
+  # Transitive dependencies
+  "libcaca-" "libopenal"
   # D3D11 shader pipeline (REQUIRED by meson.build for d3d11 vo)
   "libshaderc_shared" "libspirv-cross-c-shared"
   # UCRT/GCC runtime

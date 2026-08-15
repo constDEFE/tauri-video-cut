@@ -1,0 +1,34 @@
+name: license-check
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  licenses:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install JS deps
+        run: bun install
+
+      - name: Install license tools
+        run: |
+          bun add -d license-checker-rseidelsohn
+          cargo install --locked cargo-deny
+
+      - name: Generate license reports
+        run: bun scripts/generate-legal.ts
+
+      - name: Check Rust license policy
+        run: cargo deny --manifest-path src-tauri/Cargo.toml check licenses
+
+      - name: Upload reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: legal-artifacts
+          path: legal/generated

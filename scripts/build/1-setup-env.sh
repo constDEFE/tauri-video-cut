@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-echo "=== [1/5] Initializing MSYS2 UCRT64 Environment ==="
+echo "=== [1/4] Initializing MSYS2 UCRT64 Environment ==="
 
 if [ "$MSYSTEM" != "UCRT64" ]; then
   echo "ERROR: This script must be run inside an MSYS2 UCRT64 terminal shell!"
@@ -12,7 +12,6 @@ echo "Updating system and installing all build dependencies..."
 
 pacman -Syu --needed --noconfirm \
   mingw-w64-ucrt-x86_64-toolchain \
-  mingw-w64-ucrt-x86_64-gcc \
   git \
   make \
   nasm \
@@ -26,14 +25,11 @@ pacman -Syu --needed --noconfirm \
   \
   mingw-w64-ucrt-x86_64-zlib \
   mingw-w64-ucrt-x86_64-bzip2 \
-  mingw-w64-ucrt-x86_64-xz \
   mingw-w64-ucrt-x86_64-dav1d \
   mingw-w64-ucrt-x86_64-svt-av1 \
   mingw-w64-ucrt-x86_64-libvpx \
   mingw-w64-ucrt-x86_64-x264 \
   mingw-w64-ucrt-x86_64-x265 \
-  mingw-w64-ucrt-x86_64-opus \
-  mingw-w64-ucrt-x86_64-libvorbis \
   \
   mingw-w64-ucrt-x86_64-libass \
   mingw-w64-ucrt-x86_64-fontconfig \

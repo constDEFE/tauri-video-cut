@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-echo "=== [4/5] Compiling Custom mpv Player ==="
+echo "=== [3/4] Compiling Custom mpv Player ==="
 
 if [ "$MSYSTEM" != "UCRT64" ]; then
   echo "ERROR: This script must be run inside an MSYS2 UCRT64 terminal shell"

@@ -1,0 +1,8 @@
+# Force LF line endings for shell scripts and legal configs
+legal/** text eol=lf
+scripts/** text eol=lf
+*.sh text eol=lf
+*.ts text eol=lf
+*.env text eol=lf
+*.txt text eol=lf
+*.hbs text eol=lf

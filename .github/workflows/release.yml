@@ -1,0 +1,100 @@
+name: release
+
+on:
+  push:
+    tags:
+      - '[0-9]+.[0-9]+.[0-9]+'
+      - '[0-9]+.[0-9]+.[0-9]+-*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: git tar unzip curl
+
+      - name: Setup env (MSYS2)
+        shell: msys2 {0}
+        working-directory: scripts/build
+        run: bash 1-setup-env.sh
+
+      - name: Build FFmpeg (MSYS2)
+        shell: msys2 {0}
+        working-directory: scripts/build
+        run: bash 2-build-ff.sh
+
+      - name: Build mpv (MSYS2)
+        shell: msys2 {0}
+        working-directory: scripts/build
+        run: bash 3-build-mpv.sh
+
+      - name: Harvest binaries (MSYS2)
+        shell: msys2 {0}
+        working-directory: scripts/build
+        run: bash 4-harvest-all.sh
+
+      - name: Record build configs + collect MSYS2 licenses (MSYS2)
+        shell: msys2 {0}
+        working-directory: scripts/build
+        run: |
+          bash ../record-legal.sh
+          cd ../..
+          bash scripts/generate-msys2.sh
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install frontend deps + generate license report (PowerShell)
+        shell: pwsh
+        run: |
+          bun install
+          bun add -d license-checker-rseidelsohn license-compliance
+          bun scripts/generate-legal.ts
+
+      - name: Build Tauri app (PowerShell)
+        shell: pwsh
+        run: bun run tauri build
+
+      - name: Package release ZIP (PowerShell)
+        shell: pwsh
+        run: |
+          .\scripts\package-release.ps1 -Version "${{ github.ref_name }}"
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            windows-x64.zip
+          body: |
+            ## Download
+
+            windows-x64.zip` contains the executable, all bundled
+            libraries, and legal notices. Extract and run `tauri-video-cut.exe`.
+
+            ## GPL Compliance & Source Code
+
+            This release contains GPL-2.0 licensed binaries.
+
+            In accordance with GPLv2 Section 3, Paragraph 5, the complete
+            corresponding source code is available from this same designated
+            place (this repository).
+
+            - **Build Scripts**: Preserved in [`scripts/build/`](./tree/${{ github.ref_name }}/scripts/build) at tag `${{ github.ref_name }}`.
+            - **FFmpeg Source**: [n9.0.1](https://github.com/FFmpeg/FFmpeg/tree/n9.0.1)
+            - **mpv Source**: [v0.41.0](https://github.com/mpv-player/mpv/tree/v0.41.0)
+            - **libmpv-wrapper**: [v0.1.1](https://github.com/nini22P/libmpv-wrapper/tree/v0.1.1)
+
+            See [`SOURCE-OFFER.md`](./blob/${{ github.ref_name }}/SOURCE-OFFER.md) for full details.
+
+            > Note: bundled FFmpeg requires an AVX2-capable CPU (x86-64-v3).
