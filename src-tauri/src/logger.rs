@@ -32,7 +32,6 @@ pub fn init() {
 
     let file_appender = RollingFileAppender::builder()
         .rotation(Rotation::DAILY)
-        .filename_prefix("videocut")
         .filename_suffix("log")
         .max_log_files(10)
         .build(&log_dir)
