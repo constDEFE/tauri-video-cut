@@ -1,6 +1,5 @@
 import { useCallback, useLayoutEffect, useRef } from "preact/hooks";
 
-import { useAppConfig } from "@/entities/config";
 import { useAppZoom } from "@/shared/lib/zoom";
 
 import type { RefObject } from "preact";
