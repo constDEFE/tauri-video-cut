@@ -20,7 +20,7 @@ The problem with recording everything is that only 5–10% of an actual recordin
 2. Could overlap with previous if the duration since last save hasn't elapsed
 3. Each time you want to save the moment, you have to manually open the app, overlay, or press some keyboard combination
 
-Not quite convenient. I stuck with plain recordings.
+Not quite convenient and so I decided to stick with plain recordings.
 
 By the time I had around 30GB of free space, I discovered [LosslessCut](https://github.com/mifi/lossless-cut) — saw its huge size (~600MB) and decided to build my own. It may not be perfect: may not support other systems or many video formats/codecs, may not work perfectly on specific hardware — but it solves my specific use case, does it relatively fast, and has a small footprint.
 
@@ -32,15 +32,15 @@ By the time I had around 30GB of free space, I discovered [LosslessCut](https://
 
 This project's original source code is licensed under the [**Apache License 2.0**](./LICENSE).
 
-However, when building or distributing compiled binaries, the resulting software is governed by the [**GNU General Public License v3.0 (GPLv3)**](https://opensource.org/license/gpl-3.0) because the application dynamically/statically links to custom-built configurations of FFmpeg and mpv compiled with their GPL flags enabled, alongside various native system runtime libraries.
+However, when building or distributing compiled binaries, the resulting software is governed by the [**GNU General Public License v2.0 (GPLv2)**](https://opensource.org/license/gpl-2-0/) because the application dynamically/statically links to custom-built configurations of FFmpeg and mpv compiled with their GPL flags enabled, alongside various native system runtime libraries. See [`LICENSE.DISTRIBUTION`](./LICENSE.DISTRIBUTION) and [`SOURCE-OFFER.md`](./SOURCE-OFFER.md).
 
-Complete legal compliance details and the full license texts for all compiled Rust dependencies, Node frontend packages, and bundled third-party binaries are organized in:
+Complete legal compliance details and the full license texts for all compiled Rust dependencies, Node frontend packages, MSYS2 system packages, and bundled third-party binaries are organized in:
 
-- [`THIRDPARTY_RUST.txt`](./THIRDPARTY_RUST.txt)
-- [`THIRDPARTY_NODE.txt`](./THIRDPARTY_NODE.txt)
-- [`THIRDPARTY_BINARIES.txt`](./THIRDPARTY_BINARIES.txt)
+- [`NOTICE.md`](./NOTICE.md) — consolidated legal notices
+- [`legal/`](./legal) — generated attributions (Rust, frontend, MSYS2, FFmpeg, libmpv) and build environment
+- [`LICENSES/`](./LICENSES) — full texts of the referenced licenses
 
-These files are included in both this repository and the release artifacts. In accordance with GPLv3, the complete build configuration and full source code remain openly available in this GitHub repository.
+These files are included in both this repository and the release artifacts. In accordance with GPLv2 Section 3, the complete build configuration and full source code of all GPL components remain openly available in this GitHub repository.
 
 ### Notice & Contact
 
@@ -53,17 +53,18 @@ All third-party attribution blocks and legal texts are compiled automatically vi
 - **Multi-Segment Export** — cut multiple segments from a single video in one operation
 - **Audio Track Selection** — choose which audio tracks to include in export
 - **Embedded Player** — libmpv-powered video player with native-like experience
-- **Hardware Acceleration** — automatic detection and use of hardware encoders/decoders (cuda, d3d11va, dxva2)
 - **Waveform Visualization** — audio waveform rendered on the timeline
 - **Session Management** — save and restore editing sessions
+- **Export Cancellation** — cancel an in-progress export at any time
+- **Zoom** — persistent UI zoom scaling
 - **Logging** — log files saved at `%temp%/io.github.constdefe.tauri-video-cut`
 - **Formats** — MP4, MKV, MOV, AVI, WebM
 
 ## Tech Stack
 
-**Frontend**: Preact, TypeScript, Tailwind CSS v4, Zustand, Vite, React Router, Base UI, Sonner, clsx, tailwind-merge, nanoid, @tanstack/react-hotkeys, tauri-plugin-libmpv
+**Frontend**: Preact, TypeScript, Tailwind CSS v4, Zustand, Vite, Base UI, Sonner, clsx, tailwind-merge, nanoid, @tanstack/react-hotkeys, tauri-plugin-libmpv-api, Tauri plugins (dialog, fs, opener, shell, prevent-default)
 
-**Backend**: Rust 2024, Tauri v2, FFmpeg/FFprobe (custom-built), libmpv, tokio, dashmap, windows-sys
+**Backend**: Rust 2024 (1.97.1+), Tauri v2, FFmpeg 9.0.1/FFprobe (custom-built), libmpv 0.41.0, tokio, dashmap, windows-sys
 
 **Dev Tools**: Bun, oxlint, oxfmt
 
@@ -77,27 +78,27 @@ The frontend follows [Feature-Sliced Design](https://feature-sliced.design/) wit
 src/
 ├── app/                    # App shell: router, global styles, root error boundary
 ├── entities/               # Domain entities
-│   ├── config/             # Application configuration
+│   ├── config/             # Application configuration (theme, zoom)
 │   ├── segments/           # Cut segments
 │   ├── session/            # Editing session state
-│   └── video/              # Video metadata, player hooks, waveform
+│   ├── video/              # Video metadata and player hooks
+│   └── waveform/           # Waveform state and job sequencing
 ├── features/               # User-facing features
 │   ├── editor/             # Editor features
-│   │   ├── playback/       # Play/pause, volume, audio track selection
-│   │   ├── player/         # libmpv player integration
-│   │   ├── segment-edit/   # Add/remove/split segments
-│   │   ├── theme-switch/   # Light/dark theme toggle
-│   │   ├── timeline/       # Timeline canvas rendering
-│   │   └── waveform/       # Waveform controller
-│   ├── export/             # Export form and execution
+│   │   ├── export-controls/ # Export and re-import entry controls (hotkeys)
+│   │   ├── playback/        # Play/pause, volume, audio track selection
+│   │   ├── player/          # libmpv player integration
+│   │   ├── segment-edit/    # Add/remove/split segments
+│   │   ├── theme-switch/    # Light/dark theme toggle
+│   │   ├── timeline/        # Timeline canvas rendering (DPR-aware)
+│   │   └── waveform/        # Waveform controller
+│   ├── export/             # Export form, execution, progress, completion output
 │   └── import/             # File import and session modal
 ├── widgets/                # Composite UI sections
-│   ├── editor/             # Editor panel with preview and sidebar
-│   └── export/             # Export form and progress widgets
-├── pages/                  # Route-level pages
-│   └── export/             # Export complete page
+│   └── editor/             # Editor panel with preview and sidebar
+├── pages/                  # Route-level pages (editor, import, export flow)
 └── shared/                 # Cross-cutting utilities
-    ├── lib/                # Shared libraries (mpv, theme)
+    ├── lib/                # Shared libraries (mpv client, custom router, theme, zoom)
     ├── types/              # Shared type definitions
     ├── ui/                 # Shared UI components and icons
     └── utils/              # Shared utilities
@@ -117,8 +118,7 @@ src-tauri/src/
 ├── config/                 # Configuration model and storage
 ├── core/                   # Core business logic
 │   ├── ffmpeg/             # FFmpeg operations
-│   │   ├── executor.rs     # FFmpeg process execution
-│   │   ├── hwaccel.rs      # Hardware acceleration detection
+│   │   ├── executor.rs     # FFmpeg process execution (ProcessManager)
 │   │   ├── keyframes.rs    # Keyframe extraction
 │   │   ├── mp4_parser.rs   # MP4 container parsing
 │   │   ├── probe.rs        # Video file probing
@@ -133,7 +133,7 @@ src-tauri/src/
 │       └── registry.rs     # Waveform registry
 ├── session/                # Session model and storage
 ├── types/                  # Type definitions
-├── utils/                  # Utilities (atomic writes, cleanup, DLL loading, paths)
+├── utils/                  # Utilities (atomic writes, cleanup, subprocess helpers, DLL loading, fs, paths)
 ├── error.rs                # Error types
 ├── logger.rs               # Logging setup
 ├── lib.rs                  # Library entry point
@@ -151,34 +151,51 @@ All binaries (FFmpeg, FFprobe, libmpv DLLs) are stored in `src-tauri/lib/`. Taur
 
 #### Smart Cut Algorithm
 
-**When cut points are on keyframes:**
+**When both cut points are on keyframes:**
+
 ```
 K1C1_______K2________K3________K4C1
 ```
+
 1. Just stream copy
 
-**When cut points not on keyframes:**
+**When a cut point is off a keyframe, and valid intermediate keyframes exist (K2 < K3):**
+
 ```
-K1__C1__K2_______K3__C2__K4
+K1__C1__K2_______K3__C2
 ```
-1. Find closest keyframes outside cut boundaries (K1, K4)
-2. Re-encode to the closest keyframes inside boundaries (K1-K2, K4-K3)
-3. Stream copy first to last keyframes inside boundaries (K2-K3)
-4. Concat
-5. Trim to cut points (C1, C2)
+
+- `K1` — last keyframe before `C1` · `K2` — first keyframe after `C1` · `K3` — last keyframe before `C2`
+
+1. Head _(if `C1` off keyframe)_: decode from `K1`, trim to `C1`, re-encode `C1→K2` (video only)
+2. Middle: stream copy `K2→K3` (video only)
+3. Tail _(if `C2` off keyframe)_: decode from `K3`, re-encode `K3→C2`, forcing the first frame to a keyframe (video only)
+4. Concat video parts
+5. Validate each concat boundary with a strict decode; if the re-encoded parts are not parameter-compatible with the source, fall back to FullEncode for the whole segment
+6. Mux the stream-copied audio from the source over the final video — audio is never re-encoded, so no a/v drift
+
+Re-encoding uses the source codec's profile/level/pixel format/color range as encoder hints so the output stays concat-compatible with the copied middle.
+
+**When no valid intermediate keyframes exist (e.g. the segment fits inside a single GOP):**
+
+1. **FullEncode** — re-encode the entire `C1→C2` (decode starting from `K1`), audio stream-copied
 
 #### Stream Copy Algorithm
 
 **When cut points are on keyframes:**
+
 ```
 K1C1_______K2________K3________K4C1
 ```
+
 1. Just stream copy
 
 **When cut points not on keyframes:**
+
 ```
 K1__C1__K2_______K3__C2__K4
 ```
+
 1. Find closest keyframes outside cut boundaries (K1, K4)
 2. Stream copy (K1-K4)
 
@@ -186,10 +203,10 @@ K1__C1__K2_______K3__C2__K4
 
 ### Development
 
-- **Rust** 1.85+ (via rustup)
+- **Rust** 1.97.1+ (via rustup)
 - **Node.js** 18+ or **Bun** (recommended)
-- **FFmpeg/libmpv libraries** (Windows MSYS2)
-- **MSYS2 MINGW64 terminal**
+- **MSYS2 UCRT64 toolchain and libraries** (Windows)
+- **MSYS2 UCRT64 terminal**
 
 ## Commands
 
@@ -213,16 +230,21 @@ bun run tauri dev    # Run app in dev mode (devtools auto-open)
 bun run tauri build  # Build production app
 ```
 
+### Legal
+
+```bash
+bun run legal        # Generate third-party license attributions into legal/
+```
+
 ## Building from Source
 
 1. Clone repo
 2. Install prerequisites (Rust, Bun, MSYS2 libraries)
-3. Run scripts in `scripts/` to build custom FFmpeg and libmpv binaries:
+3. Run scripts in `scripts/build/` (from the MSYS2 UCRT64 terminal) to build custom FFmpeg and libmpv binaries:
    - `1-setup-env.sh` — environment setup
-   - `2-install-nvidia-headers.sh` — NVIDIA codec headers
-   - `3-build-ff.sh` — build FFmpeg
-   - `4-build-mpv.sh` — build libmpv
-   - `5-harvest-all.sh` — collect and organize all binaries
+   - `2-build-ff.sh` — build FFmpeg
+   - `3-build-mpv.sh` — build libmpv
+   - `4-harvest-all.sh` — collect and organize all binaries
 4. Build the app: `bun run tauri build`
 5. Installer found in `src-tauri/target/release/bundle/`
 
