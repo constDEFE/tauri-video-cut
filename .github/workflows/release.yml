@@ -94,11 +94,11 @@ jobs:
           tag_name: ${{ env.VERSION }}
           name: ${{ env.VERSION }}
           files: |
-            tauri-video-cut-${{ env.VERSION }}-windows-x64.zip
+            windows-x64.zip
           body: |
             ## Download
 
-            `tauri-video-cut-${{ env.VERSION }}-windows-x64.zip` contains the
+            `windows-x64.zip` contains the
             executable, all bundled libraries, and legal notices. Extract and run
             `tauri-video-cut.exe`.
 
@@ -113,7 +113,7 @@ jobs:
             - **Build Scripts**: Preserved in [`scripts/build/`](./tree/${{ github.sha }}/scripts/build) at commit `${{ github.sha }}`.
             - **FFmpeg Source**: [n9.0.1](https://github.com/FFmpeg/FFmpeg/tree/n9.0.1)
             - **mpv Source**: [v0.41.0](https://github.com/mpv-player/mpv/tree/v0.41.0)
-            - **libmpv-wrapper**: [v0.3.2](https://github.com/nini22P/libmpv-wrapper/tree/v0.3.2)
+            - **libmpv-wrapper**: [v0.1.1](https://github.com/nini22P/libmpv-wrapper/tree/v0.1.1)
 
             See [`SOURCE-OFFER.md`](./blob/${{ github.sha }}/SOURCE-OFFER.md) for full details.
 
