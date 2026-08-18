@@ -28,17 +28,30 @@ async function tryRun(label: string, cmd: Promise<any>) {
 	}
 }
 
+async function readJson(path: string): Promise<any | null> {
+	try {
+		if (!(await exists(path))) return null;
+		const raw = await readFile(path, "utf8");
+		if (!raw.trim()) return null;
+		return JSON.parse(raw);
+	} catch (e: any) {
+		console.warn(`[WARN] Could not parse ${path}: ${e?.message ?? e}`);
+		return null;
+	}
+}
+
 console.log("Frontend licenses...");
 await tryRun(
 	"license-checker",
 	$`bunx --bun license-checker-rseidelsohn --production --json --files > ${OUT}/frontend-licenses.json`
 );
 
+console.log("[INFO] Skipping license-compliance (compound SPDX expressions). Review frontend-licenses.json.");
+
 console.log("Rust licenses...");
 const MANIFEST = "src-tauri/Cargo.toml";
 if (has("cargo")) {
 	await tryRun("cargo-license", $`cargo license --manifest-path ${MANIFEST} --json > ${OUT}/rust-licenses.json`);
-	await tryRun("cargo-deny", $`cargo deny --manifest-path ${MANIFEST} check licenses`);
 
 	if ((await exists("legal/templates/about.hbs")) && (await exists("legal/about.toml"))) {
 		await tryRun(
@@ -46,13 +59,17 @@ if (has("cargo")) {
 			$`cargo about generate --manifest-path ${MANIFEST} --config legal/about.toml legal/templates/about.hbs > ${OUT}/rust-licenses.html`
 		);
 	}
+
+	await tryRun("cargo-deny", $`cargo deny --manifest-path ${MANIFEST} check licenses`);
+} else {
+	console.warn("[WARN] cargo not found; skipping Rust license collection.");
 }
 
-if (await exists(`${OUT}/frontend-licenses.json`)) {
-	const data = JSON.parse(await readFile(`${OUT}/frontend-licenses.json`, "utf8"));
+const frontendData = await readJson(`${OUT}/frontend-licenses.json`);
+if (frontendData) {
 	let md = `# Frontend Licenses\n\n_Generated: ${new Date().toISOString()}_\n\n`;
 
-	for (const [pkg, m] of Object.entries<any>(data)) {
+	for (const [pkg, m] of Object.entries<any>(frontendData)) {
 		md += `## ${pkg}\n- License: ${m.licenses ?? "UNKNOWN"}\n`;
 
 		if (m.repository) {
@@ -61,35 +78,36 @@ if (await exists(`${OUT}/frontend-licenses.json`)) {
 
 		md += "\n";
 
-		if (m.licenseFile && (await exists(m.licenseFile)))
+		if (m.licenseFile && (await exists(m.licenseFile))) {
 			md += "```text\n" + clean(await readFile(m.licenseFile, "utf8")) + "\n```\n\n";
-		{
 		}
 	}
 
 	await writeFile(`${OUT}/frontend-licenses.md`, md);
+} else {
+	console.warn("[WARN] frontend-licenses.json missing or empty; skipping frontend report.");
 }
 
-if (await exists(`${OUT}/rust-licenses.json`)) {
-	const crates = JSON.parse(await readFile(`${OUT}/rust-licenses.json`, "utf8"));
+const cargoData = await readJson(`${OUT}/rust-licenses.json`);
+if (cargoData) {
 	let md = `# Rust Crate Licenses\n\n_Generated: ${new Date().toISOString()}_\n\n`;
-	for (const c of crates) {
-		md += `## ${c.name} ${c.version}\n- License: ${c.license ?? "UNKNOWN"}\n`;
+	md += "> Full license texts are available in [`rust-licenses.html`](./rust-licenses.html).\n\n";
+
+	for (const c of cargoData) {
+		md += `- **${c.name}** ${c.version} — ${c.license ?? "UNKNOWN"}`;
 
 		if (c.repository) {
-			md += `- Repository: ${c.repository}\n`;
+			md += ` ([repo](${c.repository}))`;
 		}
 
 		md += "\n";
-
-		if (c.license_file && (await exists(c.license_file))) {
-			md += "```text\n" + clean(await readFile(c.license_file, "utf8")) + "\n```\n\n";
-		}
 	}
+
 	await writeFile(`${OUT}/rust-licenses.md`, md);
+} else {
+	console.warn("[WARN] rust-licenses.json missing or empty; skipping Rust report.");
 }
 
-// Combine
 let all = `# Third-Party Licenses — tauri-video-cut\n\n_Generated: ${new Date().toISOString()}_\n\n`;
 for (const f of ["frontend-licenses.md", "rust-licenses.md"]) {
 	if (await exists(join(OUT, f))) {

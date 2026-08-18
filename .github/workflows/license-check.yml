@@ -10,16 +10,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: oven-sh/setup-bun@v2
+
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Install JS deps
-        run: bun install
+      - name: Install frontend license tools
+        run: bun add -d license-checker-rseidelsohn
 
-      - name: Install license tools
-        run: |
-          bun add -d license-checker-rseidelsohn
-          cargo install --locked cargo-deny
+      - name: Install Rust license tools
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-license,cargo-about,cargo-deny
+
+      - name: Fetch crate sources (required by cargo-about)
+        run: cargo fetch --manifest-path src-tauri/Cargo.toml
 
       - name: Generate license reports
         run: bun scripts/generate-legal.ts
