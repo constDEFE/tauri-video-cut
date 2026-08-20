@@ -8,21 +8,46 @@ permissions:
   contents: write
 
 jobs:
+  check-release:
+    if: startsWith(github.event.head_commit.message, 'release:')
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get-version.outputs.VERSION }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine version & check existing release
+        id: get-version
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Checking for existing tag: $VERSION"
+
+          if git ls-remote --exit-code --tags origin "refs/tags/$VERSION" >/dev/null 2>&1; then
+            echo "::error::Release $VERSION already exists. Skipping build."
+            exit 1
+          fi
+
+          echo "✅ No existing release found for $VERSION. Proceeding."
+
   build-and-release:
+    needs: check-release
     if: startsWith(github.event.head_commit.message, 'release:')
     runs-on: windows-latest
+    env:
+      VERSION: ${{ needs.check-release.outputs.version }}
 
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Determine version
+      - name: Confirm version
         shell: pwsh
-        run: |
-          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
-          "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
-          Write-Host "Release version: $version"
+        run: 'Write-Host "Release version: $env:VERSION"'
 
       - uses: msys2/setup-msys2@v2
         with:
