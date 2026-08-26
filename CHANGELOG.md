@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.2.1] - 2026-08-27
+
+### Fixed
+
+- Fix verbose terminal window when generating waveform ([e237b1d](https://github.com/constDEFE/tauri-video-cut/commit/e237b1d0cbbd10cb49a1198d280ffdd5053bac91)) ([@constDEFE](https://github.com/constDEFE))
+
 ## [1.2.0] - 2026-08-18
 
 ### Added
@@ -76,6 +82,7 @@
 
 _Initial release._
 
+[1.2.1]: https://github.com/constdefe/tauri-video-cut/releases/tag/1.2.1
 [1.2.0]: https://github.com/constdefe/tauri-video-cut/releases/tag/1.2.0
 [1.1.1]: https://github.com/constdefe/tauri-video-cut/releases/tag/1.1.1
 [1.1.0]: https://github.com/constdefe/tauri-video-cut/releases/tag/1.1.0

@@ -252,6 +252,7 @@ bun run legal        # Generate third-party license attributions into legal/
 
 See [CHANGELOG.md](./CHANGELOG.md) for the full history.
 
+- **[1.2.1]** — Fix terminal showing up during waveform generation
 - **[1.2.0]** — See [CHANGELOG.md](./CHANGELOG.md)
 - **[1.1.1]** — Reverted keyframe extraction by packets (frames proved worse performance)
 - **[1.1.0]** — Segment export progress, auto devtools, scrollbar styling
