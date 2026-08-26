@@ -3,7 +3,6 @@ use tauri::AppHandle;
 use tauri::Emitter;
 use tokio::io::AsyncReadExt;
 use tokio::io::BufReader;
-use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 
 use crate::core::ProcessManager;
@@ -15,6 +14,7 @@ use crate::core::waveform::model::{
     WaveformFinishedEvent,
 };
 use crate::logger::{log_error, log_info, log_warn};
+use crate::utils::cmd::new_command;
 use crate::utils::fsx::CacheLock;
 
 pub const BYTES_PER_SAMPLE: usize = 2;
@@ -641,7 +641,7 @@ pub async fn run_waveform_job(
         "-",
     ]);
 
-    let mut child = Command::new(ffmpeg_path)
+    let mut child = new_command(ffmpeg_path)
         .args(args)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
