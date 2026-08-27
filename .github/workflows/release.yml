@@ -123,17 +123,13 @@ jobs:
           body: |
             ## Download
 
-            `windows-x64.zip` contains the
-            executable, all bundled libraries, and legal notices. Extract and run
-            `tauri-video-cut.exe`.
+            `windows-x64.zip` contains the executable, all bundled libraries, and legal notices. Extract and run `tauri-video-cut.exe`.
 
             ## GPL Compliance & Source Code
 
             This release contains GPL-2.0 licensed binaries.
 
-            In accordance with GPLv2 Section 3, Paragraph 5, the complete
-            corresponding source code is available from this same designated
-            place (this repository).
+            In accordance with GPLv2 Section 3, Paragraph 5, the complete corresponding source code is available from this same designated place (this repository).
 
             - **Build Scripts**: Preserved in [`scripts/build/`](https://github.com/${{ github.repository }}/tree/${{ github.sha }}/scripts/build) at commit `${{ github.sha }}`.
             - **FFmpeg Source**: [n9.0.1](https://github.com/FFmpeg/FFmpeg/tree/n9.0.1)
